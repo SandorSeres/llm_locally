@@ -65,11 +65,9 @@ async def analyze(query: QueryModel):
 async def read_index():
     return FileResponse('./index.html')
 def init():
-    ################################################
-    #Load Data
-    ################################################
+    # Load Data
     contents = os.listdir('./data')
-    # create chunks
+    # Create chunks
     node_parser = SentenceSplitter(chunk_size=512)
     PDFReader = download_loader("PDFReader")
     loader = PDFReader()
@@ -77,10 +75,9 @@ def init():
     for item in contents:
         doc = loader.load_data(file=Path('./data',item))
         nodes.append(node_parser.get_nodes_from_documents(doc))
-
     flat_list = [item for sublist in nodes for item in sublist]
-    ################################################
-
+ 
+    # LLM
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.float16,
@@ -96,12 +93,11 @@ def init():
         context_window=4096,
         max_new_tokens=2048,
         model_kwargs={"quantization_config": quantization_config},
-        # tokenizer_kwargs={},
         generate_kwargs={"temperature": 0.1, "top_k": 50, "top_p": 0.95, "do_sample":True},
         device_map="auto",
     )
 
-    #Load Open Embedding 
+    # Open Embedding 
     # a) multilingual sentence transformer for embedding.
     #embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     # b) https://huggingface.co/intfloat/multilingual-e5-large   (Multilingual Text Embeddings by Weakly-Supervised Contrastive Pre-training. )
@@ -110,10 +106,11 @@ def init():
     # ServiceContext
     service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model )
 
-    # vector vectorstore
+    # Vectorstore
     vector_index = VectorStoreIndex(
         flat_list, service_context=service_context
     )
+    # Végül megvan a query_engine 
     return vector_index.as_query_engine()
 
 global query_engine
