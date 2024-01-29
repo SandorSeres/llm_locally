@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+torch
+transformers
+pydantic
+langchain
+llama_index
+pillow
+optimum
+auto-gptq

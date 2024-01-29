@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="hu">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Dokumentum Elemző Kliens</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #chatbot {
+            width: 100vw;
+            /* Full width */
+            height: 100vh;
+            /* Full height */
+            justify-content: center;
+            align-items: center;
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #chatbot h1 {
+            color: #333;
+            font-size: 24px;
+        }
+
+        #analyzeForm {
+            display: flex;
+            flex-direction: column;
+
+        }
+
+        #analyzeForm input[type="text"] {
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        #analyzeForm input[type="submit"] {
+            width: 20vw;
+            justify-content: center;
+            margin-left: auto;
+            /* Automatikus margó bal oldalon */
+            margin-right: auto;
+            /* Automatikus margó jobb oldalon */
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #analyzeForm input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+
+        #result {
+            margin-top: 20px;
+            background-color: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            overflow-y: auto;
+            max-height: 300px;
+        }
+    </style>
+    <script>
+        // A JavaScript kód itt kerül beillesztésre
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('analyzeForm').onsubmit = function (event) {
+                event.preventDefault();
+
+                // Töröljük az előző eredményeket és időmérést
+                document.getElementById('result').innerHTML = '';
+                document.getElementById('searchTime').innerHTML = '';
+
+                const apiUrl = 'http://127.0.0.1:8000/analyze';
+                let query = document.getElementById('query').value;
+
+                // Rögzítsük a keresés kezdeti időpontját
+                let startTime = Date.now();
+
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: query })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Rögzítsük a keresés befejezési időpontját
+                        let endTime = Date.now();
+                        let searchDuration = (endTime - startTime) / 1000; // másodpercekben
+                        document.getElementById('searchTime').innerHTML = 'Keresési idő: ' + searchDuration + ' másodperc';
+                        document.getElementById('result').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                    })
+                    .catch(error => {
+                        console.error('Hiba:', error);
+                        let endTime = Date.now();
+                        let searchDuration = (endTime - startTime) / 1000; // másodpercekben
+                        document.getElementById('searchTime').innerHTML = 'Hiba történt, keresési idő: ' + searchDuration + ' másodperc';
+                    });
+            };
+        });
+    </script>
+</head>
+
+<body>
+    <div id="chatbot">
+        <h1>Dokumentum Elemző Kliens</h1>
+        <form id="analyzeForm">
+            <input type="text" id="query" name="query" placeholder="Írjon ide egy lekérdezést...">
+            <input type="submit" value="Elemzés">
+        </form>
+        <div id="result"></div>
+        <div id="searchTime"></div>
+
+    </div>
+</body>
+
+</html>
