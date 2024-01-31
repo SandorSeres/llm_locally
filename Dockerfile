@@ -8,13 +8,13 @@ RUN apt-get update && apt-get install -y python3 python3-pip
 # Másolja az alkalmazás kódját és a függőségkezelő fájlt a konténerbe
 COPY ./app.py /app/
 COPY ./index.html /app/
-COPY ./requirements.txt /app/
+COPY ./requirements.dock /app/
 
 # Állítsa be a munkakönyvtárat
 WORKDIR /app
 
 # Telepítse a függőségeket a requirements.txt fájlból
-RUN pip3 install -r requirements.txt
+RUN pip3 install -r requirements.dock
 
 # Az alkalmazás portjának nyitása
 EXPOSE 8000

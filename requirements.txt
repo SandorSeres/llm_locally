@@ -8,3 +8,7 @@ llama_index
 pillow
 optimum
 auto-gptq
+autoawq
+vllm
+bitsandbytes
+sentence-transformers

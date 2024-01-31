@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Dokumentum Elemző Kliens</title>
+    <title>Dokumentum Elemző és Feltöltő</title>
     <style>
         body {
             font-family: 'Arial', sans-serif;
@@ -14,6 +14,55 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
+        }
+
+        #uploadForm {
+            display: flex;
+            justify-content: center;
+            /* Ez igazítja középre a tartalmát */
+            flex-direction: column;
+            /* Oszlop irányba rendezi az elemeket */
+            align-items: center;
+            /* Középre igazítja az elemeket vízszintesen */
+        }
+
+        .button,
+        #uploadForm label {
+            margin: 10px 0;
+            /* Függőleges margó beállítása */
+            width: auto;
+            /* Automatikus szélesség */
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-align: center;
+            display: inline-block;
+            /* Ez biztosítja, hogy a label viselkedjen mint egy gomb */
+            width: 20vw;
+            /* Beállítja a szélességet, hogy megegyezzen a többi gombbal */
+            margin: 10px auto;
+            /* Középre igazítja a gombot */
+        }
+
+        #uploadForm input[type="submit"] {
+            width: 20vw;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .file-input {
+            display: none;
         }
 
         #chatbot {
@@ -66,6 +115,11 @@
             background-color: #0056b3;
         }
 
+
+        #uploadForm input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+
         #result {
             margin-top: 20px;
             background-color: #f8f8f8;
@@ -75,12 +129,39 @@
             overflow-y: auto;
             max-height: 300px;
         }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background-color: gray;
+            /* Csak a fejléceknek szürke háttér */
+            color: white;
+            /* Csak a fejlécek szövege legyen fehér */
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+
+        td {
+            border: 1px solid black;
+            color: black;
+            /* A cellák szövege legyen fekete */
+            padding: 8px;
+            text-align: left;
+        }
     </style>
     <script>
         // A JavaScript kód itt kerül beillesztésre
         document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('analyzeForm').onsubmit = function (event) {
                 event.preventDefault();
+                // Homokóra ikon megjelenítése és gombok letiltása
+                document.getElementById('result').style.display = 'none';
+                document.getElementById('loadingIndicator').style.display = 'block';
+                document.querySelector('#analyzeForm input[type="submit"]').disabled = true;
 
                 // Töröljük az előző eredményeket és időmérést
                 document.getElementById('result').innerHTML = '';
@@ -105,13 +186,62 @@
                         let endTime = Date.now();
                         let searchDuration = (endTime - startTime) / 1000; // másodpercekben
                         document.getElementById('searchTime').innerHTML = 'Keresési idő: ' + searchDuration + ' másodperc';
-                        document.getElementById('result').innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+
+                        // Egy táblázat létrehozása a válasz és metaadatok megjelenítéséhez
+                        let table = '<table><tr><th>Válasz</th><th>Fájlnév</th><th>Oldalszám</th></tr>';
+                        data.forEach(item => {
+                            // A metadata string átalakítása objektummá
+                            let metadataObj;
+                            try {
+                                metadataObj = JSON.parse(item.metadata.replace(/'/g, '"')); // Cseréljük le a szimpla idézőjeleket duplára
+                            } catch (e) {
+                                console.error("Hiba történt a metadata átalakításakor: ", e);
+                                metadataObj = {}; // Helytelen JSON esetén üres objektumot használunk
+                            }
+
+                            // Metadata objektum elemeinek száma
+                            let metadataLength = Object.keys(metadataObj).length;
+
+                            // Az első sor hozzáadása a válasszal és az első fájlnévvel és oldalszámmal
+                            let firstEntry = Object.values(metadataObj)[0] || { file_name: 'N/A', page_label: 'N/A' };
+                            table += `<tr>
+                                <td rowspan="${metadataLength}">${item.answer}</td>
+                                <td>${firstEntry.file_name}</td>
+                                <td>${firstEntry.page_label}</td>
+                            </tr>`;
+
+                            // További sorok hozzáadása, ha több fájl van
+                            let first = true;
+                            for (const [key, value] of Object.entries(metadataObj)) {
+                                if (!first) {
+                                    table += `<tr>
+                                        <td>${value.file_name}</td>
+                                        <td>${value.page_label}</td>
+                                    </tr>`;
+                                }
+                                first = false;
+                            }
+                        });
+                        // A forEach ciklus itt ér véget
+
+                        table += '</table>';
+
+                        document.getElementById('result').innerHTML = table;
+
+                        // Homokóra ikon elrejtése és gombok engedélyezése
+                        document.getElementById('loadingIndicator').style.display = 'none';
+                        document.getElementById('result').style.display = 'block';
+                        document.querySelector('#analyzeForm input[type="submit"]').disabled = false;
                     })
                     .catch(error => {
                         console.error('Hiba:', error);
                         let endTime = Date.now();
                         let searchDuration = (endTime - startTime) / 1000; // másodpercekben
                         document.getElementById('searchTime').innerHTML = 'Hiba történt, keresési idő: ' + searchDuration + ' másodperc';
+                        // Homokóra ikon elrejtése és gombok engedélyezése
+                        document.getElementById('loadingIndicator').style.display = 'none';
+                        document.getElementById('result').style.display = 'block';
+                        document.querySelector('#analyzeForm input[type="submit"]').disabled = false;
                     });
             };
         });
@@ -122,11 +252,44 @@
     <div id="chatbot">
         <h1>Dokumentum Elemző Kliens</h1>
         <form id="analyzeForm">
-            <input type="text" id="query" name="query" placeholder="Írjon ide egy lekérdezést...">
+            <input type="text" id="query" name="query"
+                placeholder="Írjon ide egy - a dokumentumokban lévő információkra vonatkozó - kérdést...">
             <input type="submit" value="Elemzés">
         </form>
         <div id="result"></div>
         <div id="searchTime"></div>
+        <!-- Homokóra ikon, kezdetben elrejtve -->
+        <div id="loadingIndicator" style="display: none;">
+            <center><img src="/static/hourglass.gif" alt="Betöltés..."></center>
+        </div>
+        <h2>Fájl Feltöltés</h2>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <input type="file" name="files" multiple id="fileInput" class="file-input">
+            <label for="fileInput" class="button">Fájlok kiválasztása</label>
+        </form>
+        <div id="response"></div>
+
+        <script>
+            document.getElementById('fileInput').addEventListener('change', function (e) {
+                var formData = new FormData(document.getElementById('uploadForm'));
+                document.getElementById('loadingIndicator').style.display = 'block';
+                document.getElementById('response').innerText = "";
+                fetch('/uploadfiles', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('response').innerText = data.message;
+                        document.getElementById('loadingIndicator').style.display = 'none';
+                    })
+                    .catch(error => {
+                        document.getElementById('response').innerText = 'Hiba történt: ' + error;
+                        document.getElementById('loadingIndicator').style.display = 'none';
+                    });
+            });
+        </script>
+        <div id="response"></div>
 
     </div>
 </body>
