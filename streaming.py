@@ -25,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],  # Engedélyezett fejlécek
 )
 
-API_KEY = "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"  # your api key goes here
+API_KEY = "sk-NH"  # your api key goes here
 MODEL = "gpt-4"
 MAX_TOKENS = 500
 
