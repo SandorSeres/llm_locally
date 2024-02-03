@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="hu">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Kérdés - felelet streaming módban</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #uploadForm {
+            display: flex;
+            justify-content: center;
+            /* Ez igazítja középre a tartalmát */
+            flex-direction: column;
+            /* Oszlop irányba rendezi az elemeket */
+            align-items: center;
+            /* Középre igazítja az elemeket vízszintesen */
+        }
+
+        .button,
+        #uploadForm label {
+            margin: 10px 0;
+            /* Függőleges margó beállítása */
+            width: auto;
+            /* Automatikus szélesség */
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-align: center;
+            display: inline-block;
+            /* Ez biztosítja, hogy a label viselkedjen mint egy gomb */
+            width: 20vw;
+            /* Beállítja a szélességet, hogy megegyezzen a többi gombbal */
+            margin: 10px auto;
+            /* Középre igazítja a gombot */
+        }
+
+        #uploadForm input[type="submit"] {
+            width: 20vw;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        #chatbot {
+            width: 100vw;
+            /* Full width */
+            height: 100vh;
+            /* Full height */
+            justify-content: center;
+            align-items: center;
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #chatbot h1 {
+            color: #333;
+            font-size: 24px;
+        }
+
+        #analyzeForm {
+            display: flex;
+            flex-direction: column;
+
+        }
+
+        #analyzeForm input[type="text"] {
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        #analyzeForm input[type="submit"] {
+            width: 20vw;
+            justify-content: center;
+            margin-left: auto;
+            /* Automatikus margó bal oldalon */
+            margin-right: auto;
+            /* Automatikus margó jobb oldalon */
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #analyzeForm input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+
+
+        #uploadForm input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+
+        #result {
+            margin-top: 20px;
+            background-color: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            overflow-y: auto;
+            max-height: 300px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background-color: gray;
+            /* Csak a fejléceknek szürke háttér */
+            color: white;
+            /* Csak a fejlécek szövege legyen fehér */
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+
+        td {
+            border: 1px solid black;
+            color: black;
+            /* A cellák szövege legyen fekete */
+            padding: 8px;
+            text-align: left;
+        }
+    </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('analyzeForm').onsubmit = function (event) {
+                event.preventDefault();
+                document.getElementById('result').innerHTML = '';
+                document.getElementById('searchTime').innerHTML = '';
+                const apiUrl = 'http://127.0.0.1:8000/generate';
+                let query = document.getElementById('query').value;
+                // Rögzítsük a keresés kezdeti időpontját
+                let startTime = Date.now();
+
+
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: query })
+                })
+                    .then(response => response.body.getReader())
+                    .then(reader => {
+                        const decoder = new TextDecoder('utf-8');
+                        let txt = ''
+
+                        return reader.read().then(function processText({ done, value }) {
+                            if (done) {
+                                console.log("Stream finished.");
+                                // Rögzítsük a keresés befejezési időpontját
+                                let endTime = Date.now();
+                                let searchDuration = (endTime - startTime) / 1000; // másodpercekben
+                                document.getElementById('searchTime').innerHTML = 'Válasz idő: ' + searchDuration + ' másodperc';
+                                return '';
+                            }
+
+                            completeText = decoder.decode(value, { stream: true });
+                            try {
+                                let lines = completeText.split('\n');
+                                lines.forEach((line) => {
+                                    if (line.startsWith('data: ')) {
+                                        let json_o = JSON.parse(line.substr(6)); // Eltávolítjuk a 'data: ' részt
+                                        // console.log(json_o); // Itt dolgozd fel a JSON-t
+                                        txt = json_o.choices[0].delta.content;
+                                        if (!txt) { txt = '' }
+                                        document.getElementById('result').innerText += txt;
+                                    }
+                                });
+                            } catch (error) {
+                                console.error("Error parsing JSON from chunk", error);
+                            }
+
+                            return reader.read().then(processText);
+                        });
+                    })
+                    .catch(error => {
+                        console.error('Fetch error:', error);
+                    });
+            };
+        });
+    </script>
+</head>
+
+<body>
+    <div id="chatbot">
+        <h1>Kérdés - felelet streaming módban</h1>
+        <form id="analyzeForm">
+            <input type="text" id="query" name="query"
+                placeholder="Írjon ide egy - a dokumentumokban lévő információkra vonatkozó - kérdést...">
+            <input type="submit" value="Elemzés">
+        </form>
+        <div id="result"></div>
+        <div id="searchTime"></div>
+        <!-- Homokóra ikon, kezdetben elrejtve -->
+        <div id="loadingIndicator" style="display: none;">
+            <center><img src="/static/hourglass.gif" alt="Betöltés..."></center>
+        </div>
+    </div>
+</body>
+
+
+</html>
