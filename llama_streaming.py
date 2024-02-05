@@ -33,8 +33,8 @@ app.add_middleware(
 )
 
 #MODEL= "TinyLlama/TinyLlama-1.1B-intermediate-step-480k-1T"
-MODEL= "stabilityai/stablelm-2-1_6b-zephyr"
-
+#MODEL= "stabilityai/stablelm-2-1_6b-zephyr"
+MODEL= "HuggingFaceH4/zephyr-7b-beta"
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -48,7 +48,6 @@ quantization_config = BitsAndBytesConfig(
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(  MODEL, device_map=DEVICE,  **{"quantization_config": quantization_config, 'trust_remote_code' : True} )
-
 # Egy egyszerű modell a kérésekhez és válaszokhoz
 class QueryModel(BaseModel):
     query: str
@@ -72,10 +71,15 @@ def stop_condition_met(predictions, tokenizer, threshold=0.5):
     return eos_position < 2
 
 def generate_response_stream(input_text: str, threshold=0.5):
-    input_ids = tokenizer.encode(input_text, return_tensors="pt").to(DEVICE)
+    # Prompt template definiálása
+    prompt_template= "<|system|>Minden kérdésre CSAK magyarul válaszolj!\n<|user|>{query_str}\n<|assistant|>\n\n" 
+    # Bemeneti szöveg előkészítése a template használatával
+    formatted_input = prompt_template.format(query_str=input_text)  # A lekérdezés beillesztése a template-be
+    input_ids = tokenizer.encode(formatted_input, return_tensors="pt").to(DEVICE)
     output_ids = input_ids
     model.eval()
     previous_text = ''  # Az előző szöveg tárolása.
+
 
     with torch.no_grad():
         for _ in range(MAX_TOKEN):
@@ -88,6 +92,7 @@ def generate_response_stream(input_text: str, threshold=0.5):
             next_token_id = next_token_id.unsqueeze(0)  # Hozzáadjuk a batch dimenziót, ha szükséges
 
             if stop_condition_met(predictions, tokenizer, threshold):
+                print('---------------END-------------------------')
                 break
 
             # Az output_ids és a next_token_id dimenzióinak ellenőrzése és összefűzése
@@ -103,7 +108,15 @@ def generate_response_stream(input_text: str, threshold=0.5):
             delta_text = current_text[len(previous_text):] if previous_text else current_text
             previous_text = current_text  # Frissítjük az előző szöveg változót az aktuális szövegre
             #print(delta_text)
-            yield f"data: {json.dumps({'choices': [{'delta': {'content': delta_text}}]})}\n\n"
+            # yield f"data: {json.dumps({'choices': [{'delta': {'content': delta_text}}]})}\n\n"
+
+            # Csak az első \n\n utáni szöveg küldése
+            if '<|assistant|>\n\n' in delta_text:
+                response_text = delta_text.split('\n\n', 1)[-1]  # A válaszszöveg megszűrése
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': response_text}}]})}\n\n"
+            else:
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': delta_text}}]})}\n\n"
+
 
 @app.post("/generate", response_model=List[ResponseModel])
 async def generate(query: QueryModel):
