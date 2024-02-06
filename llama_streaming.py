@@ -38,9 +38,10 @@ app.add_middleware(
     allow_headers=["*"],  # Engedélyezett fejlécek
 )
 
-#MODEL= "TinyLlama/TinyLlama-1.1B-intermediate-step-480k-1T"
-#MODEL= "stabilityai/stablelm-2-1_6b-zephyr"
-MODEL= "HuggingFaceH4/zephyr-7b-beta"
+# MODEL= "TinyLlama/TinyLlama-1.1B-intermediate-step-480k-1T"
+# MODEL= "stabilityai/stablelm-2-1_6b-zephyr"
+# MODEL= "HuggingFaceH4/zephyr-7b-beta" # viszonylag jó magyarul is
+MODEL= "HuggingFaceH4/mistral-7b-sft-beta"
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 # Kvantálás paraméterei, hogy beleférjen a GPU-ba
@@ -77,7 +78,7 @@ def stop_condition_met(predictions, tokenizer, threshold=0.5):
 
 def generate_response_stream(input_text: str, threshold=0.5):
     # Prompt template definiálása. (Szükséges, mert különben nem működik  magyar nyelven!)
-    prompt_template= "<|system|>Minden kérdésre CSAK magyarul válaszolj!\n<|user|>{query_str}\n<|assistant|>\n\n" 
+    prompt_template= "<|system|>Te egy segítőkész asszistens vagy.Minden kérdésre tömören, laza hangvétellel és CSAK magyarul válaszolj!\n</s><|user|>{query_str}\n</s><|assistant|>\n\n" 
     # Bemeneti szöveg előkészítése a template használatával
     formatted_input = prompt_template.format(query_str=input_text)  # A lekérdezés beillesztése a template-be
     input_ids = tokenizer.encode(formatted_input, return_tensors="pt").to(DEVICE)
