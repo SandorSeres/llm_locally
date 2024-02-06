@@ -130,6 +130,39 @@
             max-height: 300px;
         }
 
+        #footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #fff;
+            /* Lábléc hátterének beállítása, szükség szerint módosítható */
+            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.1);
+            /* Lábléc alatti árnyék hozzáadása */
+            position: fixed;
+            /* Lábléc rögzítése az oldal alján */
+            left: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        #footer-logo {
+            height: 30px;
+            /* Logó magasságának beállítása, szükség szerint módosítható */
+            width: auto;
+            /* A logó szélességének automatikus beállítása a magasság arányában */
+        }
+
+        #footer-text {
+            font-family: 'Times New Roman', serif;
+            font-size: 24px;
+            font-weight: bold;
+            font-style: italic;
+            color: red;
+            margin-right: 50px;
+            /* Jobb oldali margó hozzáadása */
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -291,6 +324,10 @@
         </script>
         <div id="response"></div>
 
+    </div>
+    <div id="footer">
+        <img src="/static/hospitaly.png" alt="Logo" id="footer-logo">
+        <span id="footer-text">CoDe</span>
     </div>
 </body>
 
