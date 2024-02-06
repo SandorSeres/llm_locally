@@ -39,6 +39,16 @@ DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 torch.cuda.empty_cache()
 
 app = FastAPI(title="Dokumentum Elemző API")
+app = FastAPI(
+    title="Analysing document with local LLM",
+    description="""This is a RAG API to demonstrate how to run RAG & LLM locally using GPU with max 8G VRAM.</br>
+    Currently using 'HuggingFaceH4/zephyr-7b-beta' with quantization, so using less than 6G VRAM</br>
+    Using prompt template to define the language to Hungarian. </br>
+    The client receive, and present the generated text in a streaming mode (Server-Send-Event)</br>
+    The full generation time also measured.
+    """,
+    version="1.0.0",
+)
 # Statikus fájlok könyvtárának csatolása
 app.mount("/static", StaticFiles(directory="static"), name="static")
 # CORS middleware konfiguráció
@@ -62,7 +72,7 @@ def analyze_document(query):
     answer = query_engine.query(query)
     return ResponseModel(answer=answer.response, metadata=str(answer.metadata))
 
-@app.post("/analyze", response_model=List[ResponseModel])
+@app.post("/analyze", response_model=List[ResponseModel], summary="Generate Text from the uploaded document based on the user request", description="Generates text based on the provided document & query.")
 async def analyze(query: QueryModel):
     try:
         result = analyze_document(query.query)
@@ -70,7 +80,7 @@ async def analyze(query: QueryModel):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/uploadfiles")
+@app.post("/uploadfiles", summary="Upload user .pdf files", description="User upload pdf documents and it is stored in the vector database")
 async def create_upload_files(files: List[UploadFile] = File(...)):
     if len(files) == 0:
         raise HTTPException(status_code=400, detail="Nincs fájl a feltöltéshez.")
@@ -154,9 +164,9 @@ def init_llm():
 
     # Open Embedding 
     # a) multilingual sentence transformer for embedding.
-    embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    # embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     # b) https://huggingface.co/intfloat/multilingual-e5-large   (Multilingual Text Embeddings by Weakly-Supervised Contrastive Pre-training. )
-    # embed_model = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
+    embed_model = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
     # ServiceContext
     service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model )
