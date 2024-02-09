@@ -37,7 +37,6 @@ app.add_middleware(
     allow_methods=["*"],  # Engedélyezett metódusok
     allow_headers=["*"],  # Engedélyezett fejlécek
 )
-
 # MODEL= "TinyLlama/TinyLlama-1.1B-intermediate-step-480k-1T"
 # MODEL= "stabilityai/stablelm-2-1_6b-zephyr"
 # MODEL= "HuggingFaceH4/zephyr-7b-beta" # viszonylag jó magyarul is
@@ -78,7 +77,7 @@ def stop_condition_met(predictions, tokenizer, threshold=0.5):
 
 def generate_response_stream(input_text: str, threshold=0.5):
     # Prompt template definiálása. (Szükséges, mert különben nem működik  magyar nyelven!)
-    prompt_template= "<|system|>Te egy segítőkész asszistens vagy.Minden kérdésre tömören, laza hangvétellel és CSAK magyarul válaszolj!\n</s><|user|>{query_str}\n</s><|assistant|>\n\n" 
+    prompt_template= "<|system|>Te egy segítőkész asszistens vagy aki minden kérdés tömören, és CSAK magyarul válaszol!Semmilyen más nyelv nem elfogadható!A válaszod legyen nyeltanilag átgondolt, alapos.\n</s><|user|>{query_str}\n</s><|assistant|>\n\n" 
     # Bemeneti szöveg előkészítése a template használatával
     formatted_input = prompt_template.format(query_str=input_text)  # A lekérdezés beillesztése a template-be
     input_ids = tokenizer.encode(formatted_input, return_tensors="pt").to(DEVICE)
@@ -130,4 +129,4 @@ async def read_index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8008)

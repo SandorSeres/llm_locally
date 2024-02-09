@@ -7,8 +7,8 @@ from fastapi.responses import StreamingResponse
 from typing import Any, Dict
 import httpx
 from starlette.responses import FileResponse 
-from pydantic import BaseModel
 from typing import List
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import time
@@ -30,7 +30,7 @@ app.add_middleware(
     allow_headers=["*"],  # Engedélyezett fejlécek
 )
 
-API_KEY = "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"  # your api key goes here
+API_KEY = "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"  # your api key goes here
 MODEL = "gpt-4-0125-preview"
 MAX_TOKENS = 500
 
@@ -64,7 +64,7 @@ async def generate_response_stream(query: str):
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="Error from OpenAI API")
             async for chunk in response.aiter_bytes():
-                # print(time.time_ns() ,chunk)
+                #print(time.time_ns() ,chunk)
                 yield chunk
 
 
@@ -78,4 +78,4 @@ async def read_index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8008)

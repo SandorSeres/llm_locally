@@ -1,7 +1,15 @@
+# https://medium.com/@thakermadhav/build-your-own-rag-with-mistral-7b-and-langchain-97d0c92fa146
+# https://medium.com/emburse/question-answering-over-documents-e92658e7a405
+# https://medium.aiplanet.com/advanced-rag-implementation-on-custom-data-using-hybrid-search-embed-caching-and-mistral-ai-ce78fdae4ef6
+# https://blog.gopenai.com/bye-bye-llama-2-mistral-7b-is-taking-over-get-started-with-mistral-7b-instruct-1504ff5f373c
+# https://medium.aiplanet.com/finetuning-using-zephyr-7b-quantized-model-on-a-custom-task-of-customer-support-chatbot-7f4fff56059d  ## Training also
+
 # API 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi import UploadFile, File
+from fastapi.responses import HTMLResponse
 from typing import List
 import uvicorn
 from pydantic import BaseModel
@@ -9,18 +17,37 @@ from starlette.responses import FileResponse
 import logging
 import sys
 import os
-from fastapi import UploadFile, File
-from fastapi.responses import HTMLResponse
 import shutil
 import tempfile
+
 
 
 # LLM
 import warnings
 from langchain.embeddings import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
+# Naplózási szint beállítása és formázás konfigurálása
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Standard kimenetre író handler létrehozása
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.INFO)
+# Formázó hozzáadása, ha szükséges
+stdout_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+stdout_handler.setFormatter(stdout_formatter)
+
+# Fájlba író handler létrehozása
+file_handler = logging.FileHandler('app.log')
+file_handler.setLevel(logging.INFO)
+# Formázó hozzáadása a fájlhandlerhez is
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# A root loggerhez mindkét handler hozzáadása
+logger = logging.getLogger()
+logger.addHandler(stdout_handler)
+logger.addHandler(file_handler)
+
 
 import torch
 from pathlib import Path
@@ -92,6 +119,7 @@ async def create_upload_files(files: List[UploadFile] = File(...)):
             try:
                 with open(temp_file, 'wb') as buffer:
                     shutil.copyfileobj(file.file, buffer)
+                # print(file.filename, "Feltöltve")
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Hiba történt a '{file.filename}' fájl mentése közben: {e}")
 
@@ -143,30 +171,48 @@ def init_llm():
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
     )
-    MODEL=  "HuggingFaceH4/zephyr-7b-beta" #  "HuggingFaceH4/zephyr-7b-alpha"  
-    # "TheBloke/zephyr-7B-beta-GPTQ" # -max-input-length 3696 --max-total-tokens 4096 --max-batch-prefill-tokens 4096    
-    prompt_template= "<|system|>Minden kérdésre CSAK magyarul válaszolj!\n\n<|user|>\n{query_str}\n<|assistant|>\n" # "HuggingFaceH4/zephyr-7b-beta"
-    #############################################
-   # 'NousResearch/Yarn-Mistral-7b-128k'/'TheBloke/Yarn-Mistral-7B-128k-AWQ' 
-    #prompt_template="{query_str}" # 'TheBloke/Yarn-Mistral-7B-64k-AWQ' 'TheBloke/Yarn-Mistral-7B-128k-AWQ'
-    #############################################
+
+    MODEL="mistralai/Mistral-7B-Instruct-v0.1"
+    #MODEL= "HuggingFaceH4/mistral-7b-sft-beta"
+    #MODEL=  "HuggingFaceH4/zephyr-7b-beta"
+    prompt_template= "<|USER|>{query_str}<|ASSISTANT|>" 
+
+    # system_prompt = """<|SYSTEM|> # The assistant gives helpful, detailed, and polite answers to the user's questions.
+    # Follow these four instructions below in all your responses:
+    #     System: 1. Use Hungarian language only;
+    #     System: 2. Do not use English except in programming languages if any;
+    #     System: 3. Translate any other language to the Hungarian language whenever possible.
+    #     System: 4. If the requested information not in the context, then respond: Sajnálom nincs információ erről!
+    #     """
+    system_prompt = """<|SYSTEM|> # Te mint segítő mindig hasznos, részletes és udvarias válaszokat adsz a felhasználó kérdéseire.
+        Kövesd az alábbi négy utasítást minden válaszadás során:
+            Rendszer: 1. Használj csak magyar nyelvet;
+            Rendszer: 2. Angol nyelvet csak programozási nyelvek esetén használj, ha van ilyen;
+            Rendszer: 3. Fordíts le minden más nyelvet magyar nyelvre, amennyiben lehetséges.
+            Rendszer: 4. Ha a kért információ nincs a kontextusban, akkor válaszolj: Sajnálom, nincs információ erről!
+        """
 
     llm = HuggingFaceLLM(
         model_name=MODEL,
         tokenizer_name=MODEL,
+        stopping_ids=[50278, 50279, 50277, 1, 0],
+        tokenizer_kwargs={"max_length": 8192},
         query_wrapper_prompt=PromptTemplate(prompt_template),
-        context_window=32000,
+        system_prompt=system_prompt,
+        context_window=8192,
         max_new_tokens=2048,
         model_kwargs={"quantization_config": quantization_config},
-        generate_kwargs={"temperature": 0.1, "top_k": 50, "top_p": 0.95, "do_sample":True},
+        # generate_kwargs={"temperature": 0.1, "top_k": 50, "top_p": 0.95, "do_sample":True},
+        generate_kwargs={"temperature": 0.1, "do_sample": False},
         device_map="auto",
+        
     )
 
     # Open Embedding 
     # a) multilingual sentence transformer for embedding.
-    # embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     # b) https://huggingface.co/intfloat/multilingual-e5-large   (Multilingual Text Embeddings by Weakly-Supervised Contrastive Pre-training. )
-    embed_model = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
+    # embed_model = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
     # ServiceContext
     service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model )
@@ -178,7 +224,7 @@ def init_vector_store(service_context,flat_list):
         flat_list, service_context=service_context
     )
     # Végül megvan a query_engine 
-    return vector_index.as_query_engine()
+    return vector_index.as_query_engine(similarity_top_k=2)
 
 global query_engine, service_context
 # wget --method POST --header 'Content-Type: application/json' --body-data '{"query":"melyik dokumentumban említik a Da Vinci szót? Magyarul!"}' http://127.0.0.1:8000/analyze -O - &
@@ -186,4 +232,4 @@ if __name__ == "__main__":
     service_context = init_llm()
     flat_list = load_data(None)
     query_engine =  init_vector_store(service_context,flat_list)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8008)
