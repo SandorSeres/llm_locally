@@ -20,7 +20,16 @@ import os
 import shutil
 import tempfile
 
+import dotenv
 
+dotenv.load_dotenv("./.env")
+MODEL=os.environ["MODEL"]
+SIMILARITY_TOP_K=os.environ["SIMILARITY_TOP_K"]
+MAX_TOKENS=os.environ["MAX_TOKENS"]
+CHUNK_SIZE=os.environ["CHUNK_SIZE"]
+CHUNK_OVERLAP=os.environ["CHUNK_OVERLAP"]
+EMBEDDINGS=os.environ["EMBEDDINGS"]
+PORT=os.environ["PORT"]
 
 # LLM
 import warnings
@@ -152,7 +161,8 @@ def load_data(path) :
     # Load Data
     contents = os.listdir(path)
     # Create chunks
-    node_parser = SentenceSplitter(chunk_size=512)
+    SentenceSplitter()
+    node_parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap= CHUNK_OVERLAP)
     PDFReader = download_loader("PDFReader")
     loader = PDFReader()
     nodes = []
@@ -172,24 +182,17 @@ def init_llm():
         bnb_4bit_use_double_quant=True,
     )
 
-    MODEL="mistralai/Mistral-7B-Instruct-v0.1"
-    #MODEL= "HuggingFaceH4/mistral-7b-sft-beta"
-    #MODEL=  "HuggingFaceH4/zephyr-7b-beta"
     prompt_template= "<|USER|>{query_str}<|ASSISTANT|>" 
 
-    # system_prompt = """<|SYSTEM|> # The assistant gives helpful, detailed, and polite answers to the user's questions.
-    # Follow these four instructions below in all your responses:
-    #     System: 1. Use Hungarian language only;
-    #     System: 2. Do not use English except in programming languages if any;
-    #     System: 3. Translate any other language to the Hungarian language whenever possible.
-    #     System: 4. If the requested information not in the context, then respond: Sajnálom nincs információ erről!
-    #     """
-    system_prompt = """<|SYSTEM|> # Te mint segítő mindig hasznos, részletes és udvarias válaszokat adsz a felhasználó kérdéseire.
-        Kövesd az alábbi négy utasítást minden válaszadás során:
-            Rendszer: 1. Használj csak magyar nyelvet;
-            Rendszer: 2. Angol nyelvet csak programozási nyelvek esetén használj, ha van ilyen;
-            Rendszer: 3. Fordíts le minden más nyelvet magyar nyelvre, amennyiben lehetséges.
-            Rendszer: 4. Ha a kért információ nincs a kontextusban, akkor válaszolj: Sajnálom, nincs információ erről!
+    system_prompt = """<|SYSTEM|> # Te egy asszisztens vagy és a megadott kontextus alapján mindig pontos, részletes és udvarias válaszokat adsz a felhasználó kérdéseire.
+        Kövesd az alábbi hét utasítást minden válaszadás során:
+        1. Mindig ember által olvasható kimenetet hozz létre, kerüld az értelmetlen szöveg létrehozását.
+        2. Csak magyar nyelvet használj. Semmiképp ne használj angol nyerlvet!
+        3. Csak a kért választ hozzd létre.
+        4. Ha a kért információ nincs a kontextusban, akkor válaszold: Sajnálom, nincs információ erről!
+        5. Soha ne mond hogy köszönöm, hogy örülsz segíteni, hogy Te egy mesterséges intelligencia ügynök, stb.
+        6. Használj olyan szakmai nyelvezetet, amelyet tipikusan a magyarországi üzleti dokumentumokban használnak.
+        7. Soha ne hozz létre sértő vagy trágár szöveget.
         """
 
     llm = HuggingFaceLLM(
@@ -209,10 +212,7 @@ def init_llm():
     )
 
     # Open Embedding 
-    # a) multilingual sentence transformer for embedding.
-    embed_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-    # b) https://huggingface.co/intfloat/multilingual-e5-large   (Multilingual Text Embeddings by Weakly-Supervised Contrastive Pre-training. )
-    # embed_model = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
+    embed_model = HuggingFaceEmbeddings(model_name=EMBEDDINGS)
 
     # ServiceContext
     service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model )
@@ -224,7 +224,7 @@ def init_vector_store(service_context,flat_list):
         flat_list, service_context=service_context
     )
     # Végül megvan a query_engine 
-    return vector_index.as_query_engine(similarity_top_k=2)
+    return vector_index.as_query_engine(similarity_top_k=SIMILARITY_TOP_K)
 
 global query_engine, service_context
 # wget --method POST --header 'Content-Type: application/json' --body-data '{"query":"melyik dokumentumban említik a Da Vinci szót? Magyarul!"}' http://127.0.0.1:8000/analyze -O - &
@@ -232,4 +232,4 @@ if __name__ == "__main__":
     service_context = init_llm()
     flat_list = load_data(None)
     query_engine =  init_vector_store(service_context,flat_list)
-    uvicorn.run(app, host="0.0.0.0", port=8008)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

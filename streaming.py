@@ -13,7 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import time
 import logging
-
+import dotenv
+import os
+dotenv.load_dotenv("./.env")
 logger = logging.getLogger(__name__)
 
 # Statikus fájlok könyvtárának csatolása
@@ -30,9 +32,9 @@ app.add_middleware(
     allow_headers=["*"],  # Engedélyezett fejlécek
 )
 
-API_KEY = "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"  # your api key goes here
-MODEL = "gpt-4-0125-preview"
-MAX_TOKENS = 500
+MODEL = "gpt-4-0125-preview" # os.environ["MODEL"]
+API_KEY=os.environ["API_KEY"]
+MAX_TOKENS=os.environ["MAX_TOKENS"]
 
 # Egy egyszerű modell a kérésekhez és válaszokhoz
 class QueryModel(BaseModel):
