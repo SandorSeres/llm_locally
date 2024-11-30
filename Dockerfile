@@ -5,19 +5,22 @@ CMD nvidia-smi
 # Telepítse a Python-t és a pip-et
 RUN apt-get update && apt-get install -y python3 python3-pip
 
-# Másolja az alkalmazás kódját és a függőségkezelő fájlt a konténerbe
-COPY ./app.py /app/
-COPY ./index.html /app/
+# Másolja a függőségkezelő fájlt a konténerbe
 COPY ./requirements.dock /app/
 
 # Állítsa be a munkakönyvtárat
 WORKDIR /app
 
 # Telepítse a függőségeket a requirements.txt fájlból
-RUN pip3 install -r requirements.dock
+RUN pip3 install --default-timeout=100  -r requirements.dock
 
+# Másolja az alkalmazás kódját a konténerbe
+COPY ./streaming.py /app/
+COPY ./llama_streaming.py /app/
+COPY ./static /app/static
+COPY ./.env /app/
 # Az alkalmazás portjának nyitása
 EXPOSE 8000
 
 # Indítsa el az alkalmazást
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python3", "/app/streaming.py"]

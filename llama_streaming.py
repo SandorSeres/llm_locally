@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse 
 import logging
 import json
+import os
 import torch.nn.functional as F
 
 
@@ -27,7 +28,8 @@ app = FastAPI(
     version="1.0.0",
 )
 # Statikus fájlok könyvtárának csatolása (ha van image)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+#app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(os.getcwd(), "static")), name="static")
 
 # CORS middleware hozzáadása    
 app.add_middleware(
@@ -125,8 +127,8 @@ async def generate(query: QueryModel):
 
 @app.get("/", summary="Send back the client UI.", description="This API call sends back the user UI in HTML all used Java Scripts and css included.</br>")
 async def read_index():
-    return FileResponse('./streaming.html')
+    return FileResponse('/app/static/streaming.html')
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8008)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
