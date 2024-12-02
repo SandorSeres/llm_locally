@@ -3,6 +3,7 @@ uvicorn
 torch
 transformers
 pydantic
+langchain
 langchain-community
 llama_index
 pillow
@@ -14,7 +15,12 @@ bitsandbytes
 sentence-transformers
 python-multipart
 pypdf
+unstructured[docx]
+beautifulsoup4
 typing
 accelerate
 asyncio
 openai
+neo4j
+langchain-openai
+

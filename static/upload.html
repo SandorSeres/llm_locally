@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="hu">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-fájl feltöltés</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #uploadForm {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        #uploadForm label {
+            margin: 10px 0;
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-align: center;
+            display: inline-block;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        #uploadForm input[type="submit"] {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+
+        #uploadForm input[type="submit"]:hover,
+        #uploadForm label:hover {
+            background-color: #0056b3;
+        }
+
+        #fileNames {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #333;
+        }
+
+        #footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: #fff;
+            display: flex;
+            justify-content: center;
+            padding: 10px;
+            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #footer-logo {
+            height: 30px;
+            margin-right: 10px;
+        }
+
+        #footer-text {
+            font-family: 'Times New Roman', serif;
+            font-size: 24px;
+            font-weight: bold;
+            font-style: italic;
+            color: red;
+        }
+    </style>
+</head>
+
+<body>
+    <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+        <label for="fileUpload">Fájlok kiválasztása</label>
+        <input id="fileUpload" class="file-input" type="file" name="files" multiple onchange="updateFileNames()">
+        <div id="fileNames">Nincs fájl kiválasztva</div>
+        <input type="submit" value="Feltöltés">
+    </form>
+
+    <div id="footer">
+        <img src="/static/hospitaly.png" alt="Logo" id="footer-logo">
+        <span id="footer-text">CoDe</span>
+    </div>
+
+    <script>
+        function updateFileNames() {
+            const fileInput = document.getElementById('fileUpload');
+            const fileNamesDisplay = document.getElementById('fileNames');
+
+            if (fileInput.files.length > 0) {
+                const names = Array.from(fileInput.files).map(file => file.name).join(", ");
+                fileNamesDisplay.textContent = `Kiválasztott fájlok: ${names}`;
+            } else {
+                fileNamesDisplay.textContent = 'Nincs fájl kiválasztva';
+            }
+        }
+    </script>
+</body>
+
+</html>
+

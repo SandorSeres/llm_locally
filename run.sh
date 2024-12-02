@@ -1,3 +1,6 @@
 #!/bin/bash
-docker build -t local_llm -f Dockerfile  .
-docker run -p 8000:8000 --gpus all --rm  local_llm
+# Exportáld a .env fájlban található változókat
+set -a  # Automatikusan exportálja a változókat
+source .env
+set +a  # Kikapcsolja az automatikus exportálást
+docker-compose up --build --force-recreate

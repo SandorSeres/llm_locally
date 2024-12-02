@@ -2,12 +2,15 @@
 # A választ streaming módban küldi a kliensnek, így chat módban használható
 # https://platform.openai.com/docs/api-reference
 #
+# Standard könyvtárak
+#
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
 from typing import Any, Dict
 from typing import AsyncGenerator
 import httpx
-from starlette.responses import FileResponse 
+from starlette.responses import FileResponse , HTMLResponse
 from typing import List
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,17 +23,49 @@ import os
 import openai
 import json
 from threading import Lock
+from typing import Optional
+from fastapi import UploadFile
+
 
 from starlette.middleware.sessions import SessionMiddleware
 from datetime import timedelta
+from neo4j.exceptions import ServiceUnavailable
+
+# Saját modulok
+from neo4jrag import Neo4jRAG 
+
 
 dotenv.load_dotenv("./.env")
 logger = logging.getLogger(__name__)
 
+# Globális Neo4jRAG példány
+rag = None 
+
+# FastAPI lifecycle események
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logika
+    global rag  # Globális változó használata
+    print("App startup")
+    try:
+        time.sleep (20)
+        rag = Neo4jRAG(
+            url=os.getenv("NEO4J_URI"),
+            username=os.getenv("NEO4J_USERNAME"),
+            password=os.getenv("NEO4J_PASSWORD")
+        )
+        print("RAG started")
+    except Exception as e:
+        logger.error(f"Failed to initialize Neo4jRAG: {e}")
+        rag = None
+    yield
+    # Shutdown logika
+    print("App shutdown")
+
+app = FastAPI(lifespan=lifespan)
+
+
 # Statikus fájlok könyvtárának csatolása
-
-app = FastAPI()
-
 app.mount("/static", StaticFiles(directory=os.path.join(os.getcwd(), "static")), name="static")
 app.add_middleware(SessionMiddleware, secret_key="sas")
 
@@ -50,49 +85,28 @@ OPENAI_API_KEY=os.environ["OPENAI_API_KEY"]
 from uuid import uuid4
 from fastapi import Request
 
-# Tároló a session-oknak
-SESSION_FILE = "/app/sessions.json"
-file_lock = Lock()
 
+# Új session létrehozása
 def create_session() -> str:
-    """Új session létrehozása."""
+    global rag  # Globális változó használata
     session_id = str(uuid4())
-    print("create_session")
-    sessions = load_sessions()
-    print(sessions)
-    sessions[session_id] = {"history": []}
-    save_sessions(sessions)
-    print("saved")
+    session_data = {"history": []}
+    try:
+        rag.save_session(session_id, session_data)
+    except ServiceUnavailable as e:
+        raise HTTPException(status_code=500, detail="Database unavailable.")
     return session_id
 
+# Session lekérése
 def get_session(session_id: str) -> dict:
-    """Session adatainak lekérése."""
-    print("get_session")
-    sessions = load_sessions()
-    print(sessions)
-    return sessions.get(session_id, None)
-
-def save_session(session_id: str, session_data: dict):
-    """Session adatainak frissítése."""
-    sessions = load_sessions()
-    sessions[session_id] = session_data
-    save_sessions(sessions)
-
-
-def load_sessions() -> dict:
-    """Session adatok betöltése a fájlból."""
-    with file_lock:
-        if not os.path.exists(SESSION_FILE):
-            return {}
-        with open(SESSION_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-
-def save_sessions(sessions: dict):
-    """Session adatok mentése a fájlba."""
-    with file_lock:
-        with open(SESSION_FILE, "w", encoding="utf-8") as file:
-            json.dump(sessions, file, indent=4)
-
+    global rag  # Globális változó használata
+    try:
+        session_data = rag.get_session(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        return session_data
+    except ServiceUnavailable as e:
+        raise HTTPException(status_code=500, detail="Database unavailable.")
 
 
 # Egy egyszerű modell a kérésekhez és válaszokhoz
@@ -103,15 +117,33 @@ class ResponseModel(BaseModel):
     answer: str
     metadata: str
 
-headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-
 
 #response = openai.chat.completions.create(**body)
 
 async def generate_response_stream(query: str, session_id : str, session_data: dict):
-    # Az előző üzenetek hozzáadása az új üzenethez
+    """
+    Generate a response stream for a user query using RAG and OpenAI API.
+
+    Args:
+        query: The user query.
+        session_id: The user's session ID.
+        session_data: Session data containing previous history.
+    """
+
+    """
+    """
+    # RAG keresés
+    global rag  # Globális változó használata
+    try:
+        rag_context = rag.search(query, k=3)
+    except Exception as e:
+        rag_context = "No relevant context found in RAG database."
+        print(f"RAG search failed: {e}")
     history = session_data.get("history", [])
-    history.append({"role": "user", "content": query})
+
+    history.append({"role": "system", "content": f"Context from RAG:\n{rag_context}"})
+    history.append({"role": "system", "content": query})
+
     # Teljes válasz összegyűjtésére
     full_response = ""
 
@@ -138,12 +170,10 @@ async def generate_response_stream(query: str, session_id : str, session_data: d
                 yield f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n\n"
 
     # Iterátor vége: A teljes válasz hozzáadása a history-hoz
-    if full_response.strip():  # Ellenőrizzük, hogy nem üres-e
+    if full_response.strip():
         history.append({"role": "assistant", "content": full_response})
-
-    # Frissített history mentése a session-be
-    session_data["history"] = history    
-    save_session(session_id, session_data)
+        session_data["history"] = history
+        rag.save_session(session_id, session_data)
 
 
 @app.post("/generate")
@@ -172,11 +202,45 @@ async def read_index():
     session_id = create_session()
 
     # Fájl kiszolgálása session cookie-val
-    response = FileResponse('/app/static/streaming.html')
+    response = FileResponse('/app/static/index.html')
     response.set_cookie(key="session_id", value=session_id, httponly=True, path="/")
     return response
 
+# FastAPI endpoint to upload files
+@app.get("/upload/")
+async def get_upload_form():
+    """
+    GET endpoint to return the upload.html file for the user.
+    """
+    try:
+        return HTMLResponse(content=open('/app/static/upload.html').read(), status_code=200)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="upload.html not found")
 
+@app.post("/upload/")
+async def upload_files(files: List[UploadFile]):
+    """
+    Endpoint to upload multiple documents and process them one by one.
+
+    Args:
+        files: List of uploaded files from the HTTP request.
+
+    Returns:
+        Success message with file details or raises error if processing fails.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    results = []
+    for file in files:
+        try:
+            rag.upload_document(file)
+            results.append({"filename": file.filename, "status": "success"})
+        except Exception as e:
+            results.append({"filename": file.filename, "status": f"error: {str(e)}"})
+
+    return {"results": results}        
+        
 if __name__ == "__main__":
 
     import uvicorn

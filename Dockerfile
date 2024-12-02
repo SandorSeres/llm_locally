@@ -13,9 +13,10 @@ WORKDIR /app
 
 # Telepítse a függőségeket a requirements.txt fájlból
 RUN pip3 install --default-timeout=100  -r requirements.dock
-
+RUN python3 -m nltk.downloader punkt
 # Másolja az alkalmazás kódját a konténerbe
 COPY ./streaming.py /app/
+COPY ./neo4jrag.py /app/
 COPY ./llama_streaming.py /app/
 COPY ./static /app/static
 COPY ./.env /app/

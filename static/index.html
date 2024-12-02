@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kérdés - felelet streaming módban</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+        }
+
+        .chatbox {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            background-color: #f5f5f5;
+            width: 100%;
+        }
+
+        .user-input-container {
+            display: flex;
+            padding: 10px;
+            background-color: #fff;
+            border-top: 1px solid #ddd;
+            width: 100%;
+        }
+
+        .user-input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-right: 10px;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        .send-button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .send-button:hover {
+            background-color: #0056b3;
+        }
+
+        .message {
+            margin: 10px 0;
+            display: flex;
+            flex-direction: row;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message.agent {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            padding: 10px 20px;
+            border-radius: 20px;
+            max-width: 60%;
+            word-wrap: break-word;
+        }
+
+        .bubble pre {
+            margin: 0;
+            white-space: pre-wrap;
+        }
+
+        .message.user .bubble {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .message.agent .bubble {
+            background-color: #e5e5ea;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div id="chatbox" class="chatbox"></div>
+        <div class="user-input-container">
+            <input id="query" class="user-input" type="text" placeholder="Írjon ide egy kérdést...">
+            <button onclick="sendMessage()" class="send-button">Elemzés</button>
+        </div>
+    </div>
+    <script>
+        let currentBubble; // Az aktuális buborék referenciája
+        const protocol = window.location.protocol; // 'http:' vagy 'https:'
+        const hostname = window.location.hostname; // Például '192.168.1.100' vagy 'api.sajatdomain.com'
+        const port = window.location.port; // Például '8000', ha a port meg van adva
+
+        async function sendMessage() {
+            const input = document.getElementById("query");
+            const message = input.value.trim();
+            if (message === "") return;
+
+            // Felhasználói üzenet hozzáadása új buborékba
+            addMessageToChatbox("user", message);
+            input.value = "";
+
+            let apiUrl = `${protocol}//${hostname}`;
+            if (port) {
+                apiUrl += `:${port}`;
+            }
+            apiUrl += '/generate'; // Az API végpont
+            let startTime = Date.now();
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: message })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+
+                // Új buborék létrehozása a szerver válaszához
+                currentBubble = createMessageBubble("agent");
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    processChunk(chunk);
+                }
+
+                const endTime = Date.now();
+                const duration = (endTime - startTime) / 1000;
+                appendToCurrentBubble(`\n\nVálasz idő: ${duration.toFixed(2)} másodperc`);
+            } catch (error) {
+                console.error("Fetch error:", error);
+                appendToCurrentBubble("Hiba történt a feldolgozás során.");
+            } finally {
+                currentBubble = null; // Visszaállítás, hogy új kérdés új buborékot hozzon létre
+            }
+        }
+
+        function processChunk(chunk) {
+            const lines = chunk.split('\n');
+            lines.forEach(line => {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const json = JSON.parse(line.substr(6));
+                        const content = json.choices[0].delta.content || '';
+                        appendToCurrentBubble(content);
+                    } catch (error) {
+                        console.error("JSON parsing error:", error);
+                    }
+                }
+            });
+        }
+
+        function addMessageToChatbox(sender, message) {
+            const messageDiv = createMessageBubble(sender);
+            appendToBubble(messageDiv, message);
+        }
+
+        function createMessageBubble(sender) {
+            const chatbox = document.getElementById("chatbox");
+            const messageDiv = document.createElement("div");
+            messageDiv.classList.add("message", sender);
+
+            const bubbleDiv = document.createElement("div");
+            bubbleDiv.classList.add("bubble");
+
+            messageDiv.appendChild(bubbleDiv);
+            chatbox.appendChild(messageDiv);
+
+            chatbox.scrollTop = chatbox.scrollHeight;
+            return bubbleDiv;
+        }
+
+        function appendToCurrentBubble(content) {
+            if (currentBubble) {
+                const preElement = currentBubble.querySelector("pre");
+                if (preElement) {
+                    preElement.textContent += content;
+                } else {
+                    const pre = document.createElement("pre");
+                    pre.textContent = content;
+                    currentBubble.appendChild(pre);
+                }
+            }
+        }
+
+        function appendToBubble(bubble, content) {
+            const preElement = document.createElement("pre");
+            preElement.textContent = content;
+            bubble.appendChild(preElement);
+        }
+    </script>
+</body>
+</html>
+

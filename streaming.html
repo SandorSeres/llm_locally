@@ -187,6 +187,9 @@
         }
     </style>
     <script>
+        const protocol = window.location.protocol; // 'http:' vagy 'https:'
+        const hostname = window.location.hostname; // Például '192.168.1.100' vagy 'api.sajatdomain.com'
+        const port = window.location.port; // Például '8000', ha a port meg van adva
         document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('analyzeForm').onsubmit = function (event) {
                 event.preventDefault();
@@ -194,7 +197,11 @@
                 document.getElementById('searchTime').innerHTML = '';
                 var submitButton = document.querySelector('input[type="submit"]');
                 submitButton.style.display = 'none'; // Elrejti a beküldő gombot
-                const apiUrl = 'http://127.0.0.1:8008/generate';
+                let apiUrl = `${protocol}//${hostname}`;
+                if (port) {
+                    apiUrl += `:${port}`;
+                }
+                apiUrl += '/generate'; // Az API végpont
                 let query = document.getElementById('query').value;
                 // Rögzítsük a keresés kezdeti időpontját
                 let startTime = Date.now();
