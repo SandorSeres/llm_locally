@@ -32,7 +32,7 @@ from datetime import timedelta
 from neo4j.exceptions import ServiceUnavailable
 
 # Saját modulok
-from neo4jrag import Neo4jRAG 
+from neo4jrag import * 
 
 
 dotenv.load_dotenv("./.env")
@@ -40,27 +40,33 @@ logger = logging.getLogger(__name__)
 
 # Globális Neo4jRAG példány
 rag = None 
-
+session_manager = None
+neo4j_manager = None 
 # FastAPI lifecycle események
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logika
-    global rag  # Globális változó használata
-    print("App startup")
+    global rag , session_manager , neo4j_manager # Globális változó használata
+    logger.info("App startup")
     try:
-        time.sleep (20)
-        rag = Neo4jRAG(
-            url=os.getenv("NEO4J_URI"),
-            username=os.getenv("NEO4J_USERNAME"),
-            password=os.getenv("NEO4J_PASSWORD")
+        time.sleep (10)
+        neo4j_manager = Neo4jManager(
+            url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            username=os.getenv("NEO4J_USERNAME", "neo4j"),
+            password=os.getenv("NEO4J_PASSWORD", "password"),  # Biztonsági okokból jobb környezeti változóból
         )
-        print("RAG started")
+        # Inicializáljuk a session és vector store kezelőket
+        session_manager = SessionManager(neo4j_manager)
+        logger.info("Session manager started")
+        rag = VectorStoreManager(neo4j_manager)
+        logger.info("VectorStoreManager started")
     except Exception as e:
         logger.error(f"Failed to initialize Neo4jRAG: {e}")
         rag = None
+        session_manager = None
     yield
     # Shutdown logika
-    print("App shutdown")
+    logger.info("App shutdown")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -92,7 +98,7 @@ def create_session() -> str:
     session_id = str(uuid4())
     session_data = {"history": []}
     try:
-        rag.save_session(session_id, session_data)
+        session_manager.save_session(session_id, session_data)
     except ServiceUnavailable as e:
         raise HTTPException(status_code=500, detail="Database unavailable.")
     return session_id
@@ -101,7 +107,7 @@ def create_session() -> str:
 def get_session(session_id: str) -> dict:
     global rag  # Globális változó használata
     try:
-        session_data = rag.get_session(session_id)
+        session_data = session_manager.get_session(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found.")
         return session_data
@@ -138,10 +144,12 @@ async def generate_response_stream(query: str, session_id : str, session_data: d
         rag_context = rag.search(query, k=3)
     except Exception as e:
         rag_context = "No relevant context found in RAG database."
-        print(f"RAG search failed: {e}")
+        logger.warning(f"RAG search failed: {e}")
     history = session_data.get("history", [])
 
-    history.append({"role": "system", "content": f"Context from RAG:\n{rag_context}"})
+    history.append({"role": "system", "content": f"""Answer the user question only the information in the context! If no context, then say "Sorry I have no information.\n
+Query: {query}
+Context: {rag_context}"""})
     history.append({"role": "system", "content": query})
 
     # Teljes válasz összegyűjtésére
@@ -163,9 +171,7 @@ async def generate_response_stream(query: str, session_id : str, session_data: d
     for chunk in response:
         if chunk.choices and chunk.choices[0].delta and hasattr(chunk.choices[0].delta, "content"):
             content = chunk.choices[0].delta.content
-            if content:  # Csak akkor adjuk hozzá, ha nem None
-                # A válasz hozzáadása a session history-hoz
-                #history.append({"role": "assistant", "content": content})
+            if content:  
                 full_response += content
                 yield f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n\n"
 
@@ -173,14 +179,14 @@ async def generate_response_stream(query: str, session_id : str, session_data: d
     if full_response.strip():
         history.append({"role": "assistant", "content": full_response})
         session_data["history"] = history
-        rag.save_session(session_id, session_data)
+        session_manager.save_session(session_id, session_data)
 
 
 @app.post("/generate")
 async def generate(query: QueryModel, request: Request):
     # Cookie-ból session ID lekérése
     session_id = request.cookies.get("session_id")
-    print(session_id)
+    logger.info(session_id)
     if not session_id:
         raise HTTPException(status_code=403, detail="Invalid or missing session")
 
@@ -188,7 +194,7 @@ async def generate(query: QueryModel, request: Request):
     session_data = get_session(session_id)
     if not session_data:
         raise HTTPException(status_code=403, detail="Session not found")
-    print(f"Using session data: {session_data}")
+    logger.info(f"Using session data: {session_data}")
 
     # Indítsd el a streaming válasz generálását
     return StreamingResponse(
@@ -234,13 +240,13 @@ async def upload_files(files: List[UploadFile]):
     results = []
     for file in files:
         try:
-            rag.upload_document(file)
+            await rag.upload_document(file)
             results.append({"filename": file.filename, "status": "success"})
         except Exception as e:
             results.append({"filename": file.filename, "status": f"error: {str(e)}"})
-
     return {"results": results}        
-        
+ 
+         
 if __name__ == "__main__":
 
     import uvicorn

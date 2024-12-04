@@ -2,54 +2,159 @@ import os
 import json
 import logging
 from datetime import datetime
-from io import BytesIO
 from typing import Optional, List
+from neo4j import GraphDatabase 
+from fastapi import UploadFile, HTTPException
+from llama_index.core import (
+    SimpleDirectoryReader,
+    Document
+)
+from langchain_openai import OpenAIEmbeddings
+import shutil
+from typing import List, Dict, Any
 
-from fastapi import UploadFile
+# Logolás konfigurálása
+logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+    datefmt='%Y-%m-%d:%H:%M:%S',
+    level=logging.INFO)
+
+
+import os
+import logging
+import json
+from typing import List, Optional
 from neo4j import GraphDatabase
 
-from langchain_core.documents import Document
-
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Neo4jVector
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredWordDocumentLoader as DocxLoader,
-)
-
-import numpy as np
-
-class Neo4jRAG:
+class Neo4jManager:
     def __init__(self, url: str = None, username: str = None, password: str = None, max_pool_size: int = 10):
         self.url = url or os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.username = username or os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = password or os.getenv("NEO4J_PASSWORD")
-        self.embedding = OpenAIEmbeddings()
         self.driver = GraphDatabase.driver(
             self.url,
             auth=(self.username, self.password),
             max_connection_pool_size=max_pool_size
         )
-        self.db = Neo4jVector(
-            url=self.url,
-            username=self.username,
-            password=self.password,
-            embedding=self.embedding,
-            index_name="docstore",
-        )
-        logging.info("Neo4jRAG initialized successfully")
+        logging.info("Neo4jManager initialized successfully")
 
     def close(self):
+        """Close the Neo4j connection."""
         self.driver.close()
 
-    def execute_query(self, query: str, parameters: Optional[dict] = None) -> list:
+    def count_chunks(self) -> int:
+        """Count the number of chunks in the database."""
+        query = """
+        MATCH (n:Chunk)
+        RETURN count(n) AS total_chunks
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            count = result.single()["total_chunks"]
+            return count
+
+    def save_chunk(self, text: str, embedding: List[float], metadata: dict):
+        """Save a chunk to the database."""
+        query = """
+        CREATE (n:Chunk {
+            text: $text,
+            embedding: $embedding,
+            metadata: $metadata
+        })
+        """
+        parameters = {
+            "text": text,
+            "embedding": embedding,
+            "metadata": json.dumps(metadata)  # Store metadata as JSON
+        }
+        with self.driver.session() as session:
+            session.run(query, parameters)
+        logging.info("Chunk successfully saved to Neo4j")
+
+    def create_vector_index(self, index_name: str, dimensions: int = 1536, similarity_function: str = 'cosine'):
+        """Create a vector index in the database."""
+        with self.driver.session() as session:
+            # Drop existing index if it exists
+            session.run(f"DROP INDEX {index_name} IF EXISTS")
+            # Create the vector index
+            session.run(
+                f"""
+                CREATE VECTOR INDEX {index_name}
+                FOR (n:Chunk)
+                ON (n.embedding)
+                OPTIONS {{
+                    indexConfig: {{
+                        `vector.dimensions`: {dimensions},
+                        `vector.similarity_function`: '{similarity_function}'
+                    }}
+                }}
+                """
+            )
+        logging.info(f"Vector index '{index_name}' created successfully")
+
+    def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+        """Search for the most similar chunks using a vector index."""
+        index_name = "chunk_embedding_index"
+        query = f"""
+        CALL db.index.vector.queryNodes(
+            '{index_name}',
+            $k,
+            $query_embedding
+        ) YIELD node, score
+        RETURN node.text AS text, node.metadata AS metadata, score
+        ORDER BY score DESC
+        LIMIT $k
+        """
+        parameters = {
+            "query_embedding": query_embedding,
+            "k": k
+        }
+        with self.driver.session() as session:
+            results = session.run(query, parameters)
+            logging.info(f"Raw result from Neo4j: {results} (Type: {type(results)})")
+            
+            processed_results = []
+            for record in results:
+                text = record.get("text", "")
+                metadata_raw = record.get("metadata")
+                score = record.get("score", 0.0)
+                
+                # Ellenőrizd, hogy a metadata nem None és valóban string-e
+                if metadata_raw is not None:
+                    if isinstance(metadata_raw, str):
+                        try:
+                            metadata = json.loads(metadata_raw)
+                        except json.JSONDecodeError as e:
+                            logging.error(f"JSON decoding failed for metadata: {metadata_raw} with error: {e}")
+                            metadata = {}
+                    elif isinstance(metadata_raw, dict):
+                        # Ha már dict, akkor nincs szükség json.loads-ra
+                        metadata = metadata_raw
+                    else:
+                        logging.warning(f"Unexpected metadata type: {type(metadata_raw)}. Metadata will be set to empty dict.")
+                        metadata = {}
+                else:
+                    logging.warning("Metadata is None. Setting metadata to empty dict.")
+                    metadata = {}
+                
+                processed_results.append({
+                    "text": text,
+                    "metadata": metadata,
+                    "score": score
+                })
+            
+            return processed_results
+
+    def execute_query(self, query: str, parameters: Optional[dict] = None) -> List[dict]:
+        """Execute a generic Cypher query."""
         with self.driver.session() as session:
             result = session.run(query, parameters)
             return [record for record in result]
 
-    # Session handling and persist
+
+class SessionManager:
+    def __init__(self, neo4j_manager: Neo4jManager):
+        self.neo4j_manager = neo4j_manager
+
     def save_session(self, session_id: str, session_data: dict):
         query = """
         MERGE (s:Session {id: $session_id})
@@ -57,10 +162,10 @@ class Neo4jRAG:
         """
         parameters = {
             "session_id": session_id,
-            "history": json.dumps(session_data["history"]),  # Convert to JSON string
+            "history": json.dumps(session_data["history"]),
             "updated_at": datetime.utcnow().isoformat()
         }
-        self.execute_query(query, parameters)
+        self.neo4j_manager.execute_query(query, parameters)
         logging.info("Successfully saved session")
 
     def get_session(self, session_id: str) -> Optional[dict]:
@@ -69,118 +174,141 @@ class Neo4jRAG:
         RETURN s.history AS history
         """
         parameters = {"session_id": session_id}
-        results = self.execute_query(query, parameters)
+        results = self.neo4j_manager.execute_query(query, parameters)
         if results:
             history_json = results[0]["history"]
-            return {"history": json.loads(history_json)}  # JSON string -> Python dictionary
+            return {"history": json.loads(history_json)}
         return None
 
-    # RAG search
-    def search(self, query: str, k: int = 3) -> str:
+
+class VectorStoreManager:
+    def __init__(self, neo4j_manager: Neo4jManager):
+        self.neo4j_manager = neo4j_manager
+        self.embedding = OpenAIEmbeddings()
+        # Vektorindex létrehozása
+        self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=1536)
+
+    def execute_query(self, query: str, parameters: Optional[dict] = None) -> list:
+        return self.neo4j_manager.execute_query(query, parameters)
+
+    def search(self, query: str, k: int = 3) -> List[dict]:
         try:
-            logging.info("Starting search method")
+            logging.info(f"Starting search method for query: {query}")
+            
+            # Leképezed a kérdést embedding-re
             query_embedding = self.embedding.embed_query(query)
-            # Ensure embedding is a numpy array of type float32
-            query_embedding = np.array(query_embedding).astype('float32')
-            docs_with_score = self.db.similarity_search_with_score_by_vector(query_embedding, k=k)
-            results = []
-            for doc, score in docs_with_score:
-                # Use .get to avoid KeyError
-                file_name = doc.metadata.get('file_name', 'Unknown')
-                chunk_id = doc.metadata.get('chunk_id', 'Unknown')
-                results.append(
-                    f"Score: {score}\nFile: {file_name}\nChunk ID: {chunk_id}\n{doc.page_content}"
-                )
-        except AttributeError as ae:
-            logging.error(f"AttributeError during search: {str(ae)}")
-            return "Attribute error during search."
+            
+            # Keresés Neo4j-ban
+            results = self.neo4j_manager.search_chunks(query_embedding)
+            
+            # Csak a top-k eredményt adja vissza
+            return results[:k]
         except Exception as e:
-            logging.error(f"Error during search: {str(e)}")
-            return "Error during search."
-        return "\n\n".join(results)
+            logging.error(f"Error during search: {str(e)}", exc_info=True)
+            return []
+        
 
-    # RAG upload from REST API
-    def upload_document(self, file: UploadFile):
-        """
-        Uploads and processes the document, then adds it to the Neo4j Vector index.
-
-        :param file: The uploaded file from the REST API.
-        """
+    async def upload_document(self, file: UploadFile):
+        temp_dir = None  # Initialize here for the finally block
         try:
             # Read the file content
-            content = file.file.read()
+            content = await file.read()
             file_extension = os.path.splitext(file.filename)[-1].lower()
 
-            # Create a temporary file for text documents
-            temp_file_path = f"/tmp/{file.filename}"
+            # Supported file formats
+            supported_formats = ['.pdf', '.docx', '.txt', '.md']
+
+            if file_extension not in supported_formats:
+                raise ValueError(f"Unsupported file format: {file_extension}")
+
+            # Create a temporary directory for processing
+            temp_dir = f"/tmp/{file.filename}_temp"
+            os.makedirs(temp_dir, exist_ok=True)
+
+            temp_file_path = os.path.join(temp_dir, file.filename)
 
             with open(temp_file_path, "wb") as temp_file:
                 temp_file.write(content)
 
-            # Choose the document loader based on the file format
+            documents = []
+
+            # Process the document based on its format
             if file_extension == ".pdf":
-                loader = PyPDFLoader(temp_file_path)
+                documents = self.load_pdf(temp_file_path)
             elif file_extension == ".docx":
-                loader = DocxLoader(temp_file_path)
-            elif file_extension == ".txt":
-                loader = TextLoader(temp_file_path)
+                documents = self.load_docx(temp_file_path)
+            elif file_extension in [".txt", ".md"]:
+                with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
+                    text = txt_file.read()
+                    documents = [Document(text=text, metadata={"file_name": file.filename})]
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
-            # Load the documents
-            documents = loader.load()
+            # Chunk text with metadata
+            def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
+                logging.info("Splitting text into chunks")
+                words = text.split()
+                chunks = []
+                for i in range(0, len(words), chunk_size):
+                    chunk_content = ' '.join(words[i:i + chunk_size])
+                    metadata = {
+                        "chunk_index": i // chunk_size,
+                        "chunk_start": i,
+                        "chunk_end": i + chunk_size,
+                        "file_name": file_name
+                    }
+                    chunks.append(Document(text=chunk_content, metadata=metadata))
+                return chunks
 
-            # Split the text into chunks
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-            chunks = text_splitter.split_documents(documents)
+            chunks = []
+            for doc in documents:
+                logging.info(f'Processing document: {type(doc)}')
+                chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
 
-            # Generate embeddings for the chunks
-            chunk_texts = [chunk.page_content for chunk in chunks]
-            embeddings = self.embedding.embed_documents(chunk_texts)
-
-            # Prepare data for Neo4j
-            data = [
-                {
-                    "id": chunk.metadata.get("id", f"chunk_{index}"),  # Generate unique ID
-                    "embedding": embedding,
-                    "text": chunk.page_content,
-                    "metadata": chunk.metadata,
-                }
-                for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-            ]
-
-            # Add documents to the Neo4j database
-            self.add_documents(data)
+            # Create embeddings for chunks and add to vector store
+            for chunk in chunks:
+                logging.info('Creating embedding for chunk')
+                embedding = self.embedding.embed_query(chunk.text)
+                
+                # Mentés a Neo4j-ba
+                self.neo4j_manager.save_chunk(chunk.text, embedding, chunk.metadata)
 
             logging.info(f"Successfully uploaded and processed file: {file.filename}")
+            logging.info(f"Total chunks in vectorstore: {self.neo4j_manager.count_chunks()}")
 
         except ValueError as ve:
-            logging.error(f"Validation error: {str(ve)}")
-            raise Exception(f"File upload failed: {str(ve)}")
-
+            logging.error(f"Validation error: {str(ve)}", exc_info=True)
+            raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
-            logging.error(f"Error uploading document: {str(e)}")
-            raise Exception(f"Failed to upload document: {str(e)}")
-
+            logging.error(f"Error uploading document: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal Server Error")
         finally:
-            # Remove the temporary file
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            # Remove the temporary directory and its contents
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
-    def add_documents(self, data: List[dict]):
-        """
-        Adds documents to the Neo4j database.
+    # Function to load data from .pdf files
+    def load_pdf(self, filepath: str)-> List[Document]:
+        import PyPDF2
+        pdf_text = ""
+        with open(filepath, "rb") as file:
+            reader = PyPDF2.PdfReader(file)
+            for page_num in range(len(reader.pages)):
+                page = reader.pages[page_num]
+                pdf_text += page.extract_text()
+        #logging.info(Document(text=pdf_text, metadata={"file_name": os.path.basename(filepath)}))        
+        return [Document(text=pdf_text, metadata={"file_name": os.path.basename(filepath)})]
 
-        :param data: List of document data containing id, embedding, text, and metadata fields.
-        """
-        query = """
-        UNWIND $data AS row
-        MERGE (c:Chunk {id: row.id})
-        WITH c, row
-        CALL db.create.setNodeVectorProperty(c, 'embedding', row.embedding)
-        WITH c, row
-        SET c.text = row.text
-        SET c += row.metadata
-        """
-        self.execute_query(query, {"data": data})
+    def load_docx(self, filepath: str) -> List[Document]:
+        try:
+            from docx import Document as DocxDocument  # Import python-docx
+            doc = DocxDocument(filepath)
+            full_text = []
+            for para in doc.paragraphs:
+                full_text.append(para.text)
+            combined_text = "\n".join(full_text)
+            return [Document(text=combined_text, metadata={"file_name": os.path.basename(filepath)})]
+        except Exception as e:
+            logging.error(f"Error loading docx file {filepath}: {str(e)}",exc_info=True)
+            return []
 

@@ -7,8 +7,10 @@ services:
       - "7687:7687"  # Bolt
       - "7473:7473"  # Something
     environment:
-      # Core settings
       - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+      - NEO4J_PLUGINS='["graph-data-science"]'
+      - NEO4J_dbms_security_procedures_unrestricted=gds.*
+      - NEO4J_dbms_security_procedures_allowlist=gds.*
 
     volumes:
       - neo4j_data:/data
