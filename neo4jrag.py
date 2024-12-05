@@ -5,10 +5,7 @@ from datetime import datetime
 from typing import Optional, List
 from neo4j import GraphDatabase 
 from fastapi import UploadFile, HTTPException
-from llama_index.core import (
-    SimpleDirectoryReader,
-    Document
-)
+from llama_index.core import  Document
 from langchain_openai import OpenAIEmbeddings
 import shutil
 from typing import List, Dict, Any
@@ -55,11 +52,11 @@ class Neo4jManager:
     def save_chunk(self, text: str, embedding: List[float], metadata: dict):
         """Save a chunk to the database."""
         query = """
-        CREATE (n:Chunk {
+        MERGE (n:Chunk {
             text: $text,
-            embedding: $embedding,
-            metadata: $metadata
+            embedding: $embedding
         })
+        SET n.metadata = $metadata
         """
         parameters = {
             "text": text,
@@ -68,7 +65,8 @@ class Neo4jManager:
         }
         with self.driver.session() as session:
             session.run(query, parameters)
-        logging.info("Chunk successfully saved to Neo4j")
+            logging.info("Chunk successfully saved to Neo4j")
+
 
     def create_vector_index(self, index_name: str, dimensions: int = 1536, similarity_function: str = 'cosine'):
         """Create a vector index in the database."""
@@ -110,7 +108,6 @@ class Neo4jManager:
         }
         with self.driver.session() as session:
             results = session.run(query, parameters)
-            logging.info(f"Raw result from Neo4j: {results} (Type: {type(results)})")
             
             processed_results = []
             for record in results:
@@ -187,9 +184,6 @@ class VectorStoreManager:
         self.embedding = OpenAIEmbeddings()
         # Vektorindex létrehozása
         self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=1536)
-
-    def execute_query(self, query: str, parameters: Optional[dict] = None) -> list:
-        return self.neo4j_manager.execute_query(query, parameters)
 
     def search(self, query: str, k: int = 3) -> List[dict]:
         try:
@@ -296,7 +290,6 @@ class VectorStoreManager:
             for page_num in range(len(reader.pages)):
                 page = reader.pages[page_num]
                 pdf_text += page.extract_text()
-        #logging.info(Document(text=pdf_text, metadata={"file_name": os.path.basename(filepath)}))        
         return [Document(text=pdf_text, metadata={"file_name": os.path.basename(filepath)})]
 
     def load_docx(self, filepath: str) -> List[Document]:

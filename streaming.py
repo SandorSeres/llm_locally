@@ -6,28 +6,28 @@
 #
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from contextlib import asynccontextmanager
-from typing import Any, Dict
-from typing import AsyncGenerator
-import httpx
-from starlette.responses import FileResponse , HTMLResponse
-from typing import List
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import Request, HTTPException
+from fastapi import UploadFile
+from contextlib import asynccontextmanager
+from typing import Any, Dict
+from typing import AsyncGenerator
+from typing import Optional
+from typing import List
+import httpx
+from starlette.responses import FileResponse , HTMLResponse
+from pydantic import BaseModel
+
 import time
 import logging
 import dotenv
 import os
 import openai
 import json
-from threading import Lock
-from typing import Optional
-from fastapi import UploadFile
 
 
-from starlette.middleware.sessions import SessionMiddleware
+#from starlette.middleware.sessions import SessionMiddleware
 from datetime import timedelta
 from neo4j.exceptions import ServiceUnavailable
 
@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 rag = None 
 session_manager = None
 neo4j_manager = None 
+
 # FastAPI lifecycle események
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,7 +74,7 @@ app = FastAPI(lifespan=lifespan)
 
 # Statikus fájlok könyvtárának csatolása
 app.mount("/static", StaticFiles(directory=os.path.join(os.getcwd(), "static")), name="static")
-app.add_middleware(SessionMiddleware, secret_key="sas")
+#app.add_middleware(SessionMiddleware, secret_key="sas")
 
 # CORS middleware hozzáadása    
 app.add_middleware(
@@ -147,7 +148,7 @@ async def generate_response_stream(query: str, session_id : str, session_data: d
         logger.warning(f"RAG search failed: {e}")
     history = session_data.get("history", [])
 
-    history.append({"role": "system", "content": f"""Answer the user question only the information in the context! If no context, then say "Sorry I have no information.\n
+    history.append({"role": "system", "content": f"""Answer the user question only the information in the context! If no context, then say "Sorry I have no information." on the question language.\n
 Query: {query}
 Context: {rag_context}"""})
     history.append({"role": "system", "content": query})
@@ -186,9 +187,9 @@ Context: {rag_context}"""})
 async def generate(query: QueryModel, request: Request):
     # Cookie-ból session ID lekérése
     session_id = request.cookies.get("session_id")
-    logger.info(session_id)
     if not session_id:
-        raise HTTPException(status_code=403, detail="Invalid or missing session")
+        # Új session létrehozása
+        session_id = create_session()
 
     # Hozzáférés a session adatokhoz
     session_data = get_session(session_id)
