@@ -65,7 +65,7 @@ class ModelManager:
     async def _generate_ollama_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
         "       Ollama modell streaming.     "
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=None) as client:
             try:
                 logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}")
                 response = await client.post(
@@ -80,6 +80,7 @@ class ModelManager:
                     timeout=None
                 )
                 async for line in response.aiter_lines():
+                    logger.info(f"Streamed line: {line}")  # Itt ellenőrizd a logot
                     line = line.strip()
                     if not line:
                         continue
@@ -110,7 +111,7 @@ class ModelManager:
         }
         logger.info(messages)
         logger.info(f"Body: {body} Header: {headers} URL: {self.openai_api_url}")
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", self.openai_api_url, headers=headers, json=body) as response:
                 #if response.status_code != 200:
                 #    raise HTTPException(status_code=response.status_code, detail="Error from OpenAI API")
