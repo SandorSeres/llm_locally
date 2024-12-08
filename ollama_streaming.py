@@ -42,7 +42,7 @@ class ModelManager:
         self.model_type = model_type
         self.model_name = model_name
         # Ollama url/key
-        self.ollama_api_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/generate")
+        self.ollama_api_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
         
         # OpenAI url/key        
         self.openai_api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
@@ -70,7 +70,13 @@ class ModelManager:
                 logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}")
                 response = await client.post(
                     self.ollama_api_url,
-                    json={"model": self.model_name, "prompt": prompt, "stream": True},
+                    json={
+                        "model": self.model_name, 
+                        "prompt": prompt, 
+                        "options": {
+                                "num_ctx": 4096
+                        },
+                        "stream": True},
                     timeout=None
                 )
                 async for line in response.aiter_lines():
@@ -82,6 +88,8 @@ class ModelManager:
                     except json.JSONDecodeError:
                         logger.warning(f"Ollama válasz nem JSON: {line}")
                         continue
+                    if data.get("done"):
+                        break
                     yield data
 
             except httpx.RequestError as e:
@@ -152,7 +160,7 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 model_options = {
     "openai": ["gpt-4o", "gpt-4o-mini"],
-    "ollama": ["hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0", "llama3.1", "mistral:7b", "phi3:medium"]
+    "ollama": ["hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0", "llama3.2", "mistral", "phi3"]
 }
 
 

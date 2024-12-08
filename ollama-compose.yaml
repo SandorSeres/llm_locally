@@ -5,6 +5,9 @@ services:
       dockerfile: Dockerfile.ollama
     ports:
       - "11434:11434"
+    environment:
+      - OLLAMA_FLASH_ATTENTION=1  
+      - OLLAMA_KV_CACHE_TYPE=q8_0  
     deploy:
       resources:
         reservations:
