@@ -1,218 +1,276 @@
-<!DOCTYPE html>
-<html lang="hu">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kérdés - felelet streaming módban</title>
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            width: 100%;
-            font-family: Arial, sans-serif;
-        }
+    <!DOCTYPE html>
+    <html lang="hu">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Kérdés - felelet streaming módban</title>
+        <style>
+            body, html {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                width: 100%;
+                font-family: Arial, sans-serif;
+            }
 
-        .chat-container {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            width: 100%;
-        }
+            .chat-container {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+                width: 100%;
+            }
 
-        .chatbox {
-            flex: 1;
-            padding: 10px;
-            overflow-y: auto;
-            background-color: #f5f5f5;
-            width: 100%;
-        }
+            .chatbox {
+                flex: 1;
+                padding: 10px;
+                overflow-y: auto;
+                background-color: #f5f5f5;
+                width: 100%;
+            }
 
-        .user-input-container {
-            display: flex;
-            padding: 10px;
-            background-color: #fff;
-            border-top: 1px solid #ddd;
-            width: 100%;
-        }
+            .user-input-container {
+                display: flex;
+                align-items: flex-start;
+                padding: 10px;
+                background-color: #fff;
+                border-top: 1px solid #ddd;
+                width: 100%;
+                gap: 10px;
+            }
 
-        .user-input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            margin-right: 10px;
-            font-size: 16px;
-            width: 100%;
-        }
+            .model-select {
+                padding: 5px;
+                font-size: 16px;
+                border-radius: 4px;
+                border: 1px solid #ddd;
+                background-color: #fff;
+            }
 
-        .send-button {
-            padding: 10px 20px;
-            background-color: #007bff;
-            border: none;
-            border-radius: 4px;
-            color: white;
-            font-size: 16px;
-            cursor: pointer;
-        }
+            .user-input {
+                flex: 1;
+                padding: 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                resize: vertical;
+                min-height: 40px;
+            }
 
-        .send-button:hover {
-            background-color: #0056b3;
-        }
+            .send-button {
+                padding: 10px 20px;
+                background-color: #007bff;
+                border: none;
+                border-radius: 4px;
+                color: white;
+                font-size: 16px;
+                cursor: pointer;
+                height: 40px;
+            }
+            
+            .send-button:hover {
+                background-color: #0056b3;
+            }
 
-        .message {
-            margin: 10px 0;
-            display: flex;
-            flex-direction: row;
-        }
+            .message {
+                margin: 10px 0;
+                display: flex;
+                flex-direction: row;
+            }
 
-        .message.user {
-            justify-content: flex-end;
-        }
+            .message.user {
+                justify-content: flex-end;
+            }
 
-        .message.agent {
-            justify-content: flex-start;
-        }
+            .message.agent {
+                justify-content: flex-start;
+            }
 
-        .bubble {
-            padding: 10px 20px;
-            border-radius: 20px;
-            max-width: 60%;
-            word-wrap: break-word;
-        }
+            .bubble {
+                padding: 10px 20px;
+                border-radius: 20px;
+                max-width: 60%;
+                word-wrap: break-word;
+            }
 
-        .bubble pre {
-            margin: 0;
-            white-space: pre-wrap;
-        }
+            .bubble pre {
+                margin: 0;
+                white-space: pre-wrap;
+            }
 
-        .message.user .bubble {
-            background-color: #007bff;
-            color: white;
-        }
+            .message.user .bubble {
+                background-color: #007bff;
+                color: white;
+            }
 
-        .message.agent .bubble {
-            background-color: #e5e5ea;
-            color: black;
-        }
-    </style>
-</head>
-<body>
-    <div class="chat-container">
-        <div id="chatbox" class="chatbox"></div>
-        <div class="user-input-container">
-            <input id="query" class="user-input" type="text" placeholder="Írjon ide egy kérdést...">
-            <button onclick="sendMessage()" class="send-button">Elemzés</button>
+            .message.agent .bubble {
+                background-color: #e5e5ea;
+                color: black;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="chat-container">
+            <div id="chatbox" class="chatbox"></div>
+            <div class="user-input-container">
+                <select id="model_type" class="model-select">
+                    <option value="openai">OpenAI</option>
+                    <option value="ollama">Ollama</option>
+                </select>
+                <select id="model_name" class="model-select">
+                    <!-- Alapértelmezett értékek (ollama esetén) -->
+                    <option value="gpt-4o">gpt-4o</option>
+                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                </select>
+                <textarea id="query" class="user-input" placeholder="Írjon ide egy kérdést..." rows="2"></textarea>
+                <button onclick="sendMessage()" class="send-button">Kérdés</button>
+            </div>
         </div>
-    </div>
-    <script>
-        let currentBubble; // Az aktuális buborék referenciája
-        const protocol = window.location.protocol; // 'http:' vagy 'https:'
-        const hostname = window.location.hostname; // Például '192.168.1.100' vagy 'api.sajatdomain.com'
-        const port = window.location.port; // Például '8000', ha a port meg van adva
+        <script>
+            let currentBubble; 
+            const protocol = window.location.protocol; 
+            const hostname = window.location.hostname; 
+            const port = window.location.port; 
 
-        async function sendMessage() {
-            const input = document.getElementById("query");
-            const message = input.value.trim();
-            if (message === "") return;
+            // Modellek konfigurációja
+            const modelOptions = {
+                "openai": ["gpt-4o","gpt-4o-mini"]
+                "ollama": ["hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0", "llama3.1", "mistral:7b", "phi3:medium"],
+            };
 
-            // Felhasználói üzenet hozzáadása új buborékba
-            addMessageToChatbox("user", message);
-            input.value = "";
+            // Dinamikus modell frissítés ha változik a model_type
+            const modelTypeSelect = document.getElementById("model_type");
+            const modelNameSelect = document.getElementById("model_name");
 
-            let apiUrl = `${protocol}//${hostname}`;
-            if (port) {
-                apiUrl += `:${port}`;
-            }
-            apiUrl += '/generate'; // Az API végpont
-            let startTime = Date.now();
+            modelTypeSelect.addEventListener("change", function() {
+                const selectedType = modelTypeSelect.value;
+                const models = modelOptions[selectedType] || [];
 
-            try {
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: message })
+                // Először töröljük az összes létező opciót
+                modelNameSelect.innerHTML = "";
+
+                // Új opciók hozzáadása
+                models.forEach(model => {
+                    const opt = document.createElement("option");
+                    opt.value = model;
+                    opt.textContent = model;
+                    modelNameSelect.appendChild(opt);
                 });
+            });
 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
+            // Dinamikus magasság igazítása a szövegmezőben
+            document.getElementById("query").addEventListener("input", function () {
+                this.style.height = "auto";
+                this.style.height = this.scrollHeight + "px";
+            });
 
-                // Új buborék létrehozása a szerver válaszához
-                currentBubble = createMessageBubble("agent");
+            async function sendMessage() {
+                const input = document.getElementById("query");
+                const modelType = document.getElementById("model_type").value;
+                const modelName = document.getElementById("model_name").value;
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+                const message = input.value.trim();
+                if (message === "") return;
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    processChunk(chunk);
+                addMessageToChatbox("user", message);
+                input.value = "";
+                input.style.height = "40px";
+
+                let apiUrl = `${protocol}//${hostname}`;
+                if (port) {
+                    apiUrl += `:${port}`;
                 }
+                apiUrl += '/generate'; 
+                let startTime = Date.now();
 
-                const endTime = Date.now();
-                const duration = (endTime - startTime) / 1000;
-                appendToCurrentBubble(`\n\nVálasz idő: ${duration.toFixed(2)} másodperc`);
-            } catch (error) {
-                console.error("Fetch error:", error);
-                appendToCurrentBubble("Hiba történt a feldolgozás során.");
-            } finally {
-                currentBubble = null; // Visszaállítás, hogy új kérdés új buborékot hozzon létre
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            query: message,
+                            model_type: modelType,
+                            model_name: modelName
+                        })
+                    });
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder('utf-8');
+
+                    currentBubble = createMessageBubble("agent");
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        processChunk(chunk);
+                    }
+
+                    const endTime = Date.now();
+                    const duration = (endTime - startTime) / 1000;
+                    appendToCurrentBubble(`\n\nVálasz idő: ${duration.toFixed(2)} másodperc`);
+                } catch (error) {
+                    console.error("Fetch error:", error);
+                    appendToCurrentBubble("Hiba történt a feldolgozás során.");
+                } finally {
+                    currentBubble = null;
+                }
             }
-        }
 
-        function processChunk(chunk) {
-            const lines = chunk.split('\n');
-            lines.forEach(line => {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const json = JSON.parse(line.substr(6));
-                        const content = json.choices[0].delta.content || '';
-                        appendToCurrentBubble(content);
-                    } catch (error) {
-                        console.error("JSON parsing error:", error);
+            function processChunk(chunk) {
+                const lines = chunk.split('\n');
+                lines.forEach(line => {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const json = JSON.parse(line.substr(6));
+                            const content = json.choices[0].delta.content || '';
+                            appendToCurrentBubble(content);
+                        } catch (error) {
+                            console.error("JSON parsing error:", error);
+                        }
+                    }
+                });
+            }
+
+            function addMessageToChatbox(sender, message) {
+                const messageDiv = createMessageBubble(sender);
+                appendToBubble(messageDiv, message);
+            }
+
+            function createMessageBubble(sender) {
+                const chatbox = document.getElementById("chatbox");
+                const messageDiv = document.createElement("div");
+                messageDiv.classList.add("message", sender);
+
+                const bubbleDiv = document.createElement("div");
+                bubbleDiv.classList.add("bubble");
+
+                messageDiv.appendChild(bubbleDiv);
+                chatbox.appendChild(messageDiv);
+
+                chatbox.scrollTop = chatbox.scrollHeight;
+                return bubbleDiv;
+            }
+
+            function appendToCurrentBubble(content) {
+                if (currentBubble) {
+                    const preElement = currentBubble.querySelector("pre");
+                    if (preElement) {
+                        preElement.textContent += content;
+                    } else {
+                        const pre = document.createElement("pre");
+                        pre.textContent = content;
+                        currentBubble.appendChild(pre);
                     }
                 }
-            });
-        }
-
-        function addMessageToChatbox(sender, message) {
-            const messageDiv = createMessageBubble(sender);
-            appendToBubble(messageDiv, message);
-        }
-
-        function createMessageBubble(sender) {
-            const chatbox = document.getElementById("chatbox");
-            const messageDiv = document.createElement("div");
-            messageDiv.classList.add("message", sender);
-
-            const bubbleDiv = document.createElement("div");
-            bubbleDiv.classList.add("bubble");
-
-            messageDiv.appendChild(bubbleDiv);
-            chatbox.appendChild(messageDiv);
-
-            chatbox.scrollTop = chatbox.scrollHeight;
-            return bubbleDiv;
-        }
-
-        function appendToCurrentBubble(content) {
-            if (currentBubble) {
-                const preElement = currentBubble.querySelector("pre");
-                if (preElement) {
-                    preElement.textContent += content;
-                } else {
-                    const pre = document.createElement("pre");
-                    pre.textContent = content;
-                    currentBubble.appendChild(pre);
-                }
             }
-        }
 
-        function appendToBubble(bubble, content) {
-            const preElement = document.createElement("pre");
-            preElement.textContent = content;
-            bubble.appendChild(preElement);
-        }
-    </script>
-</body>
-</html>
+            function appendToBubble(bubble, content) {
+                const preElement = document.createElement("pre");
+                preElement.textContent = content;
+                bubble.appendChild(preElement);
+            }
+        </script>
+    </body>
+    </html>
 

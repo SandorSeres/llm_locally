@@ -15,13 +15,13 @@ WORKDIR /app
 RUN pip3 install --default-timeout=100  -r requirements.dock
 RUN python3 -m nltk.downloader punkt
 # Másolja az alkalmazás kódját a konténerbe
-COPY ./streaming.py /app/
+COPY ./ollama_streaming.py /app/
 COPY ./neo4jrag.py /app/
-COPY ./llama_streaming.py /app/
 COPY ./static /app/static
+COPY ./templates /app/templates
 COPY ./.env /app/
 # Az alkalmazás portjának nyitása
 EXPOSE 8000
 
 # Indítsa el az alkalmazást
-CMD ["python3", "/app/streaming.py"]
+CMD ["python3", "/app/ollama_streaming.py"]

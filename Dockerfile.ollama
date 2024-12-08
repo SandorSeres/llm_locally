@@ -1,0 +1,22 @@
+FROM ollama/ollama:latest
+
+RUN apt update && apt install  bash procps coreutils
+
+# Indítunk egy háttérben futó ollama szervert, várunk kicsit amíg elindul,
+# majd lehúzzuk a modelleket, végül leállítjuk a szervert.
+RUN (ollama serve &); \
+    sleep 5; \
+    echo "eurollm" && \
+    ollama pull hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0 && \
+    echo "llama3.2" && \
+    ollama pull llama3.2 && \
+    echo "mistral" && \
+    ollama pull mistral && \
+    echo "phy3" && \
+    ollama pull phi3 && \
+    echo "Done" && \
+    pkill ollama
+
+# Ha minden modell sikeresen letöltődött, akkor a CMD-ben már csak a szervert indítjuk.
+CMD ["serve"]
+

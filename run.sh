@@ -3,4 +3,5 @@
 set -a  # Automatikusan exportálja a változókat
 source .env
 set +a  # Kikapcsolja az automatikus exportálást
-docker-compose up --build --force-recreate
+docker-compose -f ollama-compose.yaml up --build --force-recreate
+
