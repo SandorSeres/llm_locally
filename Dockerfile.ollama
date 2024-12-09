@@ -6,14 +6,12 @@ RUN apt update && apt install  bash procps coreutils
 # majd lehúzzuk a modelleket, végül leállítjuk a szervert.
 RUN (ollama serve &); \
     sleep 5; \
-    echo "eurollm" && \
-    ollama pull hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0 && \
+    echo "gemma2" && \
+    ollama pull gemma2 && \
+    echo "mistral-nemo" && \
+    ollama pull mistral-nemo && \
     echo "llama3.2" && \
     ollama pull llama3.2 && \
-    echo "mistral" && \
-    ollama pull mistral && \
-    echo "phy3" && \
-    ollama pull phi3 && \
     echo "Done" && \
     pkill ollama
 

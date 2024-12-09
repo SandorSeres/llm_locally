@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Globális változók
+
+model_options = {
+    "openai": ["gpt-4o", "gpt-4o-mini"],
+    "ollama": ["gemma2","mistral-nemo", "llama3.2"]
+}
+
 rag = None
 session_manager = None
 neo4j_manager = None
@@ -74,7 +80,7 @@ class ModelManager:
                         "model": self.model_name, 
                         "prompt": prompt, 
                         "options": {
-                                "num_ctx": 4096
+                                "num_ctx": 8096
                         },
                         "stream": True},
                     timeout=None
@@ -82,6 +88,7 @@ class ModelManager:
                 async for line in response.aiter_lines():
                     logger.info(f"Streamed line: {line}")  # Itt ellenőrizd a logot
                     line = line.strip()
+                    logger.info(line)
                     if not line:
                         continue
                     try:
@@ -159,11 +166,6 @@ app.add_middleware(
 
 # Templétek elérési útja
 templates = Jinja2Templates(directory="templates")
-model_options = {
-    "openai": ["gpt-4o", "gpt-4o-mini"],
-    "ollama": ["hf.co/QuantFactory/EuroLLM-9B-GGUF:Q4_0", "llama3.2", "mistral", "phi3"]
-}
-
 
 
 class QueryModel(BaseModel):
@@ -308,11 +310,42 @@ async def get_upload_form():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="upload.html not found")
 
+"""
+
+from fastapi import BackgroundTasks
+
+@app.post("/upload/")
+async def upload_files(files: List[UploadFile], background_tasks: BackgroundTasks):
+    """
+    Több dokumentum feltöltése és feldolgozása háttérfeladatként.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    def process_all_files(files_data: List[dict]):
+        results = []
+        for file_data in files_data:
+            try:
+                # Fájl tartalom és név feldolgozása
+                rag.upload_document(file_data["filename"], file_data["content"])
+                results.append({"filename": file_data["filename"], "status": "success"})
+            except Exception as e:
+                results.append({"filename": file_data["filename"], "status": f"error: {str(e)}"})
+        # Logikát itt lehet bővíteni, például eredmények mentése adatbázisba
+        print(f"Feldolgozás eredményei: {results}")
+
+    # A fájlok tartalmának előzetes olvasása
+    files_data = [{"filename": file.filename, "content": await file.read()} for file in files]
+
+    # Háttérfeladat indítása
+    background_tasks.add_task(process_all_files, files_data)
+
+    return {"message": "Files are being processed in the background"}
+
+"""
 @app.post("/upload/")
 async def upload_files(files: List[UploadFile]):
-    """
-    Több dokumentum feltöltése és feldolgozása.
-    """
+    "    Több dokumentum feltöltése és feldolgozása."
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
@@ -324,7 +357,6 @@ async def upload_files(files: List[UploadFile]):
         except Exception as e:
             results.append({"filename": file.filename, "status": f"error: {str(e)}"})
     return {"results": results}
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
