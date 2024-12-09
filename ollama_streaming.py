@@ -67,9 +67,48 @@ class ModelManager:
                 yield chunk
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
+    """
+        async def _generate_ollama_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
+            "       Ollama modell streaming.     "
+            prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+            async with httpx.AsyncClient(timeout=None) as client:
+                try:
+                    logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}")
+                    response = await client.post(
+                        self.ollama_api_url,
+                        json={
+                            "model": self.model_name, 
+                            "prompt": prompt, 
+                            "options": {
+                                    "num_ctx": 8096
+                            },
+                            "stream": True},
+                        timeout=None
+                    )
+                    async for line in response.aiter_lines():
+                        logger.info(f"Streamed line: {line}")  # Itt ellenőrizd a logot
+                        line = line.strip()
+                        logger.info(line)
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Ollama válasz nem JSON: {line}")
+                            continue
+                        if data.get("done"):
+                            break
+                        yield data
 
+                except httpx.RequestError as e:
+                    logger.error(f"Ollama request error: {e}")
+                    raise HTTPException(status_code=500, detail="Ollama API hiba.")
+    """
     async def _generate_ollama_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
-        "       Ollama modell streaming.     "
+        """
+        Ollama modell streaming.
+        A választ OpenAI-kompatibilis formátumra alakítjuk.
+        """
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
         async with httpx.AsyncClient(timeout=None) as client:
             try:
@@ -77,32 +116,46 @@ class ModelManager:
                 response = await client.post(
                     self.ollama_api_url,
                     json={
-                        "model": self.model_name, 
-                        "prompt": prompt, 
-                        "options": {
-                                "num_ctx": 8096
-                        },
-                        "stream": True},
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "options": {"num_ctx": 8096},
+                        "stream": True
+                    },
                     timeout=None
                 )
                 async for line in response.aiter_lines():
-                    logger.info(f"Streamed line: {line}")  # Itt ellenőrizd a logot
                     line = line.strip()
-                    logger.info(line)
                     if not line:
                         continue
+
+                    logger.info(f"Streamed line: {line}")  # Ellenőrzés
+
                     try:
                         data = json.loads(line)
                     except json.JSONDecodeError:
                         logger.warning(f"Ollama válasz nem JSON: {line}")
                         continue
-                    if data.get("done"):
-                        break
-                    yield data
 
+                    # Stream végének kezelése
+                    if data.get("done"):
+                        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                        break
+
+                    # Tartalom lekérése az Ollama válaszból és átalakítás
+                    content = data.get("response", "")
+                    if content:
+                        yield {
+                            "choices": [
+                                {
+                                    "delta": {"content": content},
+                                    "finish_reason": None
+                                }
+                            ]
+                        }
             except httpx.RequestError as e:
                 logger.error(f"Ollama request error: {e}")
                 raise HTTPException(status_code=500, detail="Ollama API hiba.")
+
 
     async def _generate_openai_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
 
@@ -310,39 +363,6 @@ async def get_upload_form():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="upload.html not found")
 
-"""
-
-from fastapi import BackgroundTasks
-
-@app.post("/upload/")
-async def upload_files(files: List[UploadFile], background_tasks: BackgroundTasks):
-    """
-    Több dokumentum feltöltése és feldolgozása háttérfeladatként.
-    """
-    if not files:
-        raise HTTPException(status_code=400, detail="No files uploaded")
-
-    def process_all_files(files_data: List[dict]):
-        results = []
-        for file_data in files_data:
-            try:
-                # Fájl tartalom és név feldolgozása
-                rag.upload_document(file_data["filename"], file_data["content"])
-                results.append({"filename": file_data["filename"], "status": "success"})
-            except Exception as e:
-                results.append({"filename": file_data["filename"], "status": f"error: {str(e)}"})
-        # Logikát itt lehet bővíteni, például eredmények mentése adatbázisba
-        print(f"Feldolgozás eredményei: {results}")
-
-    # A fájlok tartalmának előzetes olvasása
-    files_data = [{"filename": file.filename, "content": await file.read()} for file in files]
-
-    # Háttérfeladat indítása
-    background_tasks.add_task(process_all_files, files_data)
-
-    return {"message": "Files are being processed in the background"}
-
-"""
 @app.post("/upload/")
 async def upload_files(files: List[UploadFile]):
     "    Több dokumentum feltöltése és feldolgozása."

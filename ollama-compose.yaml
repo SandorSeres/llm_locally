@@ -22,7 +22,7 @@ services:
     ports:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
-      - "7473:7473"  # Something
+      - "7473:7473"  # HTTPS
     environment:
       - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
 

@@ -226,10 +226,9 @@
             lines.forEach(line => {
                 if (line.startsWith('data: ')) {
                     try {
-                        const json = JSON.parse(line.substr(6));
-
                         // Ellenőrizzük a response mezőt
-                        const content = json.response || '';
+                        const json = JSON.parse(line.substr(6));
+                        const content = json.choices[0].delta.content || '';
                         if (content) {
                             appendToCurrentBubble(content);
                         }

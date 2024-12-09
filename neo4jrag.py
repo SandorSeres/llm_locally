@@ -9,6 +9,10 @@ from llama_index.core import  Document
 from langchain_openai import OpenAIEmbeddings
 import shutil
 from typing import List, Dict, Any
+#
+# http://localhost:7474/browser/
+#
+
 
 # Logolás konfigurálása
 logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
