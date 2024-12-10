@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import os
+import aiofiles
+import uuid
 
 from contextlib import asynccontextmanager
 from typing import Any, Dict, AsyncGenerator, Optional, List
@@ -20,6 +22,7 @@ import dotenv
 import os
 import json
 import asyncio
+from io import BytesIO
 
 # Saját modulok
 from neo4jrag import *
@@ -363,20 +366,43 @@ async def get_upload_form():
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="upload.html not found")
 
+
+async def process_file(file_path: str, original_filename: str):
+    try:
+        async with aiofiles.open(file_path, 'rb') as file:
+            content = await file.read()
+            await rag.upload_document(content, filename=original_filename)
+        return {"filename": original_filename, "status": "success"}
+    except Exception as e:
+        logger.error(f"Error processing {original_filename}: {str(e)}")
+        return {"filename": original_filename, "status": f"error: {str(e)}"}
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+                        
+async def process_files_background(file_paths: List[tuple]):
+    for file_path, original_filename in file_paths:
+        result = await process_file(file_path, original_filename)
+        logger.info(f"{result['filename']} stored with status: {result['status']}")
+    logger.info("File upload process finished.")
+
 @app.post("/upload/")
-async def upload_files(files: List[UploadFile]):
-    "    Több dokumentum feltöltése és feldolgozása."
+async def upload_files(files: List[UploadFile], background_tasks: BackgroundTasks):
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    results = []
+    temp_file_paths = []
     for file in files:
-        try:
-            await rag.upload_document(file)
-            results.append({"filename": file.filename, "status": "success"})
-        except Exception as e:
-            results.append({"filename": file.filename, "status": f"error: {str(e)}"})
-    return {"results": results}
+        temp_path = f"temp_{file.filename}"
+        async with aiofiles.open(temp_path, 'wb') as out_file:
+            content = await file.read()
+            await out_file.write(content)
+        temp_file_paths.append((temp_path, file.filename))
+
+    background_tasks.add_task(process_files_background, temp_file_paths)
+    
+    return {"message": "File processing started in the background"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

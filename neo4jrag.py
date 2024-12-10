@@ -206,12 +206,20 @@ class VectorStoreManager:
             return []
         
 
-    async def upload_document(self, file: UploadFile):
-        temp_dir = None  # Initialize here for the finally block
+    async def upload_document(self, file_or_content, filename=None):
+        temp_dir = None
         try:
-            # Read the file content
-            content = await file.read()
-            file_extension = os.path.splitext(file.filename)[-1].lower()
+            if isinstance(file_or_content, UploadFile):
+                content = await file_or_content.read()
+                filename = file_or_content.filename
+            elif isinstance(file_or_content, bytes):
+                content = file_or_content
+                if filename is None:
+                    raise ValueError("Filename must be provided when uploading bytes content")
+            else:
+                raise ValueError("Invalid input type. Expected UploadFile or bytes.")
+
+            file_extension = os.path.splitext(filename)[-1].lower()
 
             # Supported file formats
             supported_formats = ['.pdf', '.docx', '.txt', '.md']
@@ -220,10 +228,10 @@ class VectorStoreManager:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
             # Create a temporary directory for processing
-            temp_dir = f"/tmp/{file.filename}_temp"
+            temp_dir = f"/tmp/{filename}_temp"
             os.makedirs(temp_dir, exist_ok=True)
 
-            temp_file_path = os.path.join(temp_dir, file.filename)
+            temp_file_path = os.path.join(temp_dir, filename)
 
             with open(temp_file_path, "wb") as temp_file:
                 temp_file.write(content)
@@ -271,7 +279,7 @@ class VectorStoreManager:
                 # Mentés a Neo4j-ba
                 self.neo4j_manager.save_chunk(chunk.text, embedding, chunk.metadata)
 
-            logging.info(f"Successfully uploaded and processed file: {file.filename}")
+            logging.info(f"Successfully uploaded and processed file.")
             logging.info(f"Total chunks in vectorstore: {self.neo4j_manager.count_chunks()}")
 
         except ValueError as ve:
