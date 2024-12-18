@@ -1,40 +1,328 @@
-# Streaming kommunikáció
+# Chatbot Project with Neo4j and Small LLM
 
-Ez a megoldás egy aszinkron kliens-szerver streaming interfész, amely lehetővé teszi az adatfolyam alapú kommunikációt. A szerver oldalon egy FastAPI alkalmazásban definiáljuk a `generate_response_stream` és a `generate` függvényeket, míg a kliens oldal egy weboldalon futó JavaScript kódot tartalmaz, amely az API végponttal kommunikál.
+This project provides a FastAPI-based chatbot application that integrates with a Neo4j database to store and query vector embeddings. The chatbot can work with OpenAI or Ollama containers for small LLMs and supports GPU acceleration.
 
-### Szerver oldali leírás:
+## Features
+- **Neo4j Integration:** Stores document chunks with embeddings and supports vector search.
+- **FastAPI Endpoints:**
+  - `POST /upload`: Uploads documents (PDF, DOCX, TXT, MD), processes them into chunks, and saves them to Neo4j.
+  - `GET /`: Returns an `index.html` template.
+- **Vector Indexing:** Automatically creates vector indices in Neo4j for similarity searches.
+- **Graph Relationships:** Establishes relationships (`BELONGS_TO`, `SIMILAR_TO`, `NEXT`) between document chunks.
 
-- **`generate_response_stream` aszinkron függvény**: Ez a függvény végzi az OpenAI API-val való kommunikációt. A függvény egy `query` paramétert kap, amely alapján a modelltől választ kér. A választ chunk-okban (adattömbökben) kapja meg, amelyeket egyesével, azok beérkezése szerint küld tovább a kliens felé. Amennyiben a válasz állapota nem 200, egy HTTP kivételt dob.
-- **`generate` aszinkron végpont**: Egy API végpont, ami fogadja a kliens kéréseit. A kérés törzsében kapott `query` alapján hívja meg a `generate_response_stream` függvényt, és a választ egy streaming válaszként küldi vissza a kliensnek. A `StreamingResponse` objektum `media_type` paramétere megadja a válasz tartalmának típusát, amely ebben az esetben `application/json`.
+## Project Structure
+```
+# Chatbot Project with Neo4j and Small LLM
 
-### Kliens oldali leírás:
+This project provides a FastAPI-based chatbot application that integrates with a Neo4j database to store and query vector embeddings. The chatbot can work with OpenAI or Ollama containers for small LLMs and supports GPU acceleration.
 
-A kliens oldali kód egy HTML oldalon belül futó JavaScript, amely beküldi a felhasználói lekérdezéseket a szervernek és megjeleníti a válaszokat.
+## Features
+- **Neo4j Integration:** Stores document chunks with embeddings and supports vector search.
+- **FastAPI Endpoints:**
+  - `POST /upload`: Uploads documents (PDF, DOCX, TXT, MD), processes them into chunks, and saves them to Neo4j.
+  - `GET /`: Returns an `index.html` template.
+- **Vector Indexing:** Automatically creates vector indices in Neo4j for similarity searches.
+- **Graph Relationships:** Establishes relationships (`BELONGS_TO`, `SIMILAR_TO`, `NEXT`) between document chunks.
 
-- Az űrlap beküldésekor (`onsubmit` eseménykezelő) a kód megakadályozza az alapértelmezett működést, azaz az oldal újratöltését.
-- A felhasználó által megadott lekérdezést (`query`) egy POST kérésben küldi el az API-nak, JSON formátumban.
-- A válasz a `.body.getReader()` metódussal kerül feldolgozásra, ami lehetővé teszi az adatok streamelését.
-- Az adatok dekódolása után a kód ellenőrzi, hogy az adatok JSON formátumúak-e, és feldolgozza őket.
-- Az eredmény megjelenítése a felhasználó számára dinamikusan, a válaszok beérkezése szerint történik.
-- Az adatfolyam végén rögzíti a keresés időtartamát, ami információt nyújt a felhasználónak a válaszidőről.
+## Project Structure
+```
+.
+├── deploy
+│   ├── build.sh
+│   ├── deploy.sh
+│   ├── Dockerfile
+│   ├── neo4j.Dockerfile
+│   └── remove.sh
+├── docker-compose.yml
+├── Dockerfile
+├── Dockerfile.ollama
+├── neo4jrag.py
+├── ollama_streaming.py
+├── README.md
+├── requirements.dock
+├── requirements.txt
+├── run.sh
+├── static
+│   ├── hospitaly.png
+│   ├── hourglass.gif
+│   └── upload.html
+└── templates
+    └── index.html
 
-Ez a megközelítés lehetővé teszi az adatok aszinkron streamelését a kliens és a szerver között, javítva ezzel a felhasználói élményt nagy adatmennyiség vagy hosszabb feldolgozási idő esetén.
+```
 
-## Server-Sent Events (SSE)
+## Prerequisites
+- **Docker and Docker Compose**
+- **NVIDIA Docker** (if using GPU)
+- **Neo4j** credentials set in the `.env` file:
+  ```bash
+  NEO4J_USERNAME=neo4j
+  NEO4J_PASSWORD=your_password
+  ```
 
-A Server-Sent Events (SSE) egy olyan webes technológia, amely lehetővé teszi a szerverek számára, hogy valós időben adatokat küldjenek a webböngészőknek egy HTTP kapcsolaton keresztül. Az SSE-t specifikusan az egyirányú kommunikációra tervezték, ahol a szerver aktívan küld adatokat a kliensnek, anélkül, hogy a kliensnek újabb kéréseket kellene indítania a szerver felé. Ez különbözteti meg a WebSockets-től, ami egy kétirányú kommunikációs protokoll.
+## Installation and Setup
 
-### Server-Sent Events jellemzői:
+### 1. Clone the Repository
+```bash
+git clone git@github.com:SandorSeres/llm_locally.git
+cd llm_locally
+```
 
-- **Egyszerűség**: Az SSE használata egyszerűbb, mint a WebSockets, mert HTTP-t használ, így könnyebb integrálni meglévő HTTP alapú infrastruktúrákkal.
-- **Automatikus újrakapcsolódás**: Ha a kapcsolat megszakad, a kliens automatikusan újrakapcsolódik a szerverhez.
-- **Egyirányú kommunikáció**: Az SSE csak a szerverről a kliens felé történő adatfolyamot támogat, ami kisebb komplexitást jelent bizonyos alkalmazások számára.
-- **Szabványos HTTP kapcsolat**: Mivel az SSE HTTP kapcsolaton működik, kompatibilis a legtöbb tűzfal és proxy szerverrel.
+### 2. Environment Variables
+Create a `.env` file with the following:
+```bash
+NEO4J_URI=bolt://neo4j:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your_password
+```
 
-### Kapcsolat a bemutatott megoldással:
+### 3. Build and Run
+Start the application using Docker Compose:
+```bash
+docker-compose up --build
+```
+- Neo4j Browser: [http://localhost:7474](http://localhost:7474)
+- FastAPI Application: [http://localhost:8000](http://localhost:8000)
+- FastAPI Upload: [http://localhost:8000](http://localhost:8000/upload)
 
-Az általad bemutatott kód nem használja közvetlenül az SSE protokollt, hanem egy általános aszinkron streaming megoldást implementál az OpenAI API-val való kommunikációra. Azonban az elv hasonló: a szerver folyamatosan küld adatokat a kliensnek az adatfolyam elérhetővé válása során. A különbség az, hogy az itt bemutatott megoldás egy specifikus API válaszait streameli a kliens felé, míg az SSE egy szabványosított módszer adatok kliensnek való pusholására webes alkalmazásokban.
+> **Note:** Before rebuilding the environment, ensure to remove old volumes:
+> ```bash
+> docker-compose down -v
+> ```
 
-### SSE alkalmazása a bemutatott kontextusban:
+### 4. Test Endpoints
+- **Upload a document:**
+  ```bash
+  curl -X POST "http://localhost:8000/upload" \
+  -F "file=@example.pdf"
+  
+  or
+  http://localhost:8000/upload
 
-Az SSE integrálása a bemutatott kódstruktúrába lehetővé tenné az adatok hatékonyabb streamelését a kliensnek, különösen eseményvezérelt alkalmazások esetén, ahol a szerver oldali események valós idejű közvetítése a kliens számára fontos. Például, ha az OpenAI API válaszai nagy mennyiségű adatot generálnak, vagy ha az adatok idővel változnak, az SSE segíthet az adatok hatékonyabb kliens oldali megjelenítésében anélkül, hogy a kliensnek periodikusan új lekérdezéseket kellene indítania.
+  ```
+  
+- **Access the main page:** [http://localhost:8000](http://localhost:8000)
+
+## Docker Compose
+The `docker-compose.yml` sets up the FastAPI app and Neo4j container:
+
+```yaml
+services:
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j_vector
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/import
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot_app
+    ports:
+      - "8000:8000"  # FastAPI app HTTP
+    depends_on:
+      - neo4j
+    volumes:
+      - app_data:/app/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all  # GPU visibility
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  app_data:
+```
+
+## Neo4j Setup
+The `neo4j.py` handles:
+- Saving text chunks with embeddings
+- Creating vector indices
+- Searching similar chunks
+- Establishing graph relationships
+
+### Key Methods:
+1. **`save_chunk`**: Save text chunks with metadata and embeddings.
+2. **`create_vector_index`**: Create a vector index in Neo4j.
+3. **`search_chunks`**: Perform similarity search.
+4. **`create_document_relationships`**: Link chunks to their parent documents.
+5. **`create_similarity_relationships`**: Establish similarity relationships between chunks.
+
+## GPU Support
+The application supports GPU through NVIDIA Docker configurations. Ensure NVIDIA drivers and the CUDA toolkit are installed on your system.
+
+## Dependencies
+Install the Python dependencies for development:
+```bash
+pip install -r requirements.txt
+```
+
+## Notes
+- Supports **OpenAI** and **Ollama** small LLMs for embedding generation.
+- Uploads and processes `.pdf`, `.docx`, `.txt`, and `.md` files into vector chunks.
+- Before rebuilding the environment, always run:
+  ```bash
+  docker-compose down -v
+  ```
+
+## License
+This project is licensed under the MIT License.
+
+## Author
+**Your Name** - [GSandor Seres](https://github.com/SandorSeres)
+```
+
+## Prerequisites
+- **Docker and Docker Compose**
+- **NVIDIA Docker** (if using GPU)
+- **Neo4j** credentials set in the `.env` file:
+  ```bash
+  NEO4J_USERNAME=neo4j
+  NEO4J_PASSWORD=your_password
+  ```
+
+## Installation and Setup
+
+### 1. Clone the Repository
+```bash
+git clone git@github.com:SandorSeres/llm_locally.git
+cd your_project
+```
+
+### 2. Environment Variables
+Create a `.env` file with the following:
+```bash
+NEO4J_URI=bolt://neo4j:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=your_password
+```
+
+### 3. Build and Run
+Start the application using Docker Compose:
+```bash
+docker-compose up --build
+```
+- Neo4j Browser: [http://localhost:7474](http://localhost:7474)
+- FastAPI Application: [http://localhost:8000](http://localhost:8000)
+
+> **Note:** Before rebuilding the environment, ensure to remove old volumes:
+> ```bash
+> docker-compose down -v
+> ```
+
+### 4. Test Endpoints
+- **Upload a document:**
+  ```bash
+  curl -X POST "http://localhost:8000/upload" \
+  -F "file=@example.pdf"
+  ```
+- **Access the main page:** [http://localhost:8000](http://localhost:8000)
+
+## Docker Compose
+The `docker-compose.yml` sets up the FastAPI app and Neo4j container:
+
+```yaml
+services:
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j_vector
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/import
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot_app
+    ports:
+      - "8000:8000"  # FastAPI app HTTP
+    depends_on:
+      - neo4j
+    volumes:
+      - app_data:/app/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all  # GPU visibility
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  app_data:
+```
+
+## Neo4j Setup
+The `neo4j.py` handles:
+- Saving text chunks with embeddings
+- Creating vector indices
+- Searching similar chunks
+- Establishing graph relationships
+
+### Key Methods:
+1. **`save_chunk`**: Save text chunks with metadata and embeddings.
+2. **`create_vector_index`**: Create a vector index in Neo4j.
+3. **`search_chunks`**: Perform similarity search.
+4. **`create_document_relationships`**: Link chunks to their parent documents.
+5. **`create_similarity_relationships`**: Establish similarity relationships between chunks.
+
+## GPU Support
+The application supports GPU through NVIDIA Docker configurations. Ensure NVIDIA drivers and the CUDA toolkit are installed on your system.
+
+## Dependencies
+Install the Python dependencies for development:
+```bash
+pip install -r requirements.txt
+```
+
+## Notes
+- Supports **OpenAI** and **Ollama** small LLMs for embedding generation.
+- Uploads and processes `.pdf`, `.docx`, `.txt`, and `.md` files into vector chunks.
+- Before rebuilding the environment, always run:
+  ```bash
+  docker-compose down -v
+  ```
+
+## License
+This project is licensed under the MIT License.
+
+## Author
+**Your Name** - [SandorSeres](https://github.com/SandorSeres)
+
