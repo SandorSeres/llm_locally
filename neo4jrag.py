@@ -9,6 +9,7 @@ from llama_index.core import  Document
 from langchain_openai import OpenAIEmbeddings
 import shutil
 from typing import List, Dict, Any
+import uuid
 #
 # http://localhost:7474/browser/
 #
@@ -53,23 +54,30 @@ class Neo4jManager:
             count = result.single()["total_chunks"]
             return count
 
+
     def save_chunk(self, text: str, embedding: List[float], metadata: dict):
-        """Save a chunk to the database."""
+        """Save a chunk to the database with expanded metadata."""
         query = """
-        MERGE (n:Chunk {
-            text: $text,
-            embedding: $embedding
-        })
-        SET n.metadata = $metadata
+        MERGE (n:Chunk {chunk_id: $chunk_id})  // A chunk_id-t használjuk azonosítóként
+        SET n.text = $text,
+            n.embedding = $embedding,
+            n.file_name = $file_name,
+            n.chunk_index = $chunk_index,
+            n.chunk_start = $chunk_start,
+            n.chunk_end = $chunk_end
         """
         parameters = {
+            "chunk_id": metadata.get("chunk_id"),  # Új kulcs: chunk_id
             "text": text,
             "embedding": embedding,
-            "metadata": json.dumps(metadata)  # Store metadata as JSON
+            "file_name": metadata.get("file_name"),
+            "chunk_index": metadata.get("chunk_index"),
+            "chunk_start": metadata.get("chunk_start"),
+            "chunk_end": metadata.get("chunk_end")
         }
         with self.driver.session() as session:
             session.run(query, parameters)
-            logging.info("Chunk successfully saved to Neo4j")
+            logging.info(f"Chunk '{metadata.get('chunk_id')}' successfully saved to Neo4j")
 
 
     def create_vector_index(self, index_name: str, dimensions: int = 1536, similarity_function: str = 'cosine'):
@@ -148,14 +156,12 @@ class Neo4jManager:
     def create_document_relationships(self):
         """
         Create BELONGS_TO relationships between chunks and their document nodes.
-        Assumes 'file_name' is in the metadata of each chunk.
+        Assumes 'file_name' is stored as a separate property in each chunk.
         """
         query = """
         MATCH (chunk:Chunk)
-        WHERE chunk.metadata IS NOT NULL
-        WITH chunk, chunk.metadata.file_name AS file_name
-        WHERE file_name IS NOT NULL
-        MERGE (doc:Document {name: file_name})
+        WHERE chunk.file_name IS NOT NULL
+        MERGE (doc:Document {name: chunk.file_name})
         MERGE (chunk)-[:BELONGS_TO]->(doc)
         RETURN count(*) AS relationships_created
         """
@@ -164,23 +170,44 @@ class Neo4jManager:
             count = result.single()["relationships_created"]
             logging.info(f"{count} BELONGS_TO relationships created successfully.")
 
-    def create_similarity_relationships(self, threshold: float = 0.8):
+    def create_similarity_relationships(self, index_name: str = "chunk_embedding_index", threshold: float = 0.8):
         """
-        Create or update SIMILAR_TO relationships based on cosine similarity.
-        Avoid duplicate relationships and update similarity if already exists.
+        Create SIMILAR_TO relationships based on vector index similarity.
         """
-        query = """
-        MATCH (c1:Chunk), (c2:Chunk)
-        WHERE id(c1) <> id(c2)
-        WITH c1, c2, cosineSimilarity(c1.embedding, c2.embedding) AS similarity
-        WHERE similarity > $threshold
-        MERGE (c1)-[r:SIMILAR_TO]->(c2)
-        ON CREATE SET r.similarity = similarity
-        ON MATCH SET r.similarity = similarity
+        query = f"""
+        MATCH (c1:Chunk)
+        CALL db.index.vector.queryNodes(
+            '{index_name}',
+            10, // Top 10 hasonló chunk
+            c1.embedding
+        ) YIELD node, score
+        WHERE score > $threshold AND node <> c1
+        MERGE (c1)-[r:SIMILAR_TO]->(node)
+        ON CREATE SET r.similarity = score
         """
         with self.driver.session() as session:
             session.run(query, {"threshold": threshold})
-            logging.info(f"SIMILAR_TO relationships created or updated for similarity > {threshold}")
+            logging.info(f"SIMILAR_TO relationships created with similarity threshold > {threshold}")
+
+    def create_next_relationship(self, prev_chunk_id: str, current_chunk_id: str):
+        """
+        Create a NEXT relationship between two chunks identified by their unique chunk_id.
+        """
+        query = """
+        MATCH (c1:Chunk {chunk_id: $prev_chunk_id})
+        MATCH (c2:Chunk {chunk_id: $current_chunk_id})
+        WHERE c1 <> c2
+        MERGE (c1)-[:NEXT]->(c2)
+        """
+        parameters = {
+            "prev_chunk_id": prev_chunk_id,
+            "current_chunk_id": current_chunk_id
+        }
+        with self.driver.session() as session:
+            logging.info(f"Creating NEXT relationship: {prev_chunk_id} -> {current_chunk_id}")
+            result = session.run(query, parameters)
+            logging.info(f"NEXT relationship creation result: {result.consume().counters}")
+
     def execute_query(self, query: str, parameters: Optional[dict] = None) -> List[dict]:
         """Execute a generic Cypher query."""
         with self.driver.session() as session:
@@ -240,11 +267,83 @@ class VectorStoreManager:
         except Exception as e:
             logging.error(f"Error during search: {str(e)}", exc_info=True)
             return []
-        
 
+    def search_chunks_by_document(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+        """Retrieve chunks and related chunks from the same document."""
+        index_name = "chunk_embedding_index"
+        query = f"""
+        CALL db.index.vector.queryNodes(
+            '{index_name}',
+            $k,
+            $query_embedding
+        ) YIELD node, score
+        MATCH (node)-[:BELONGS_TO]->(doc:Document)<-[:BELONGS_TO]-(related_chunk:Chunk)
+        RETURN node.text AS text, node.metadata AS metadata, score,
+               related_chunk.text AS related_text, related_chunk.metadata AS related_metadata
+        ORDER BY score DESC
+        LIMIT $k
+        """
+        parameters = {
+            "query_embedding": query_embedding,
+            "k": k
+        }
+        with self.driver.session() as session:
+            results = session.run(query, parameters)
+            return [
+                {
+                    "text": record["text"],
+                    "metadata": json.loads(record["metadata"]),
+                    "related_text": record["related_text"],
+                    "related_metadata": json.loads(record["related_metadata"]),
+                    "score": record["score"]
+                }
+                for record in results
+            ]
+
+    def search_chunks_with_relationships(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+        """Search for similar chunks and their related chunks using graph relationships."""
+        index_name = "chunk_embedding_index"
+        query = f"""
+        CALL db.index.vector.queryNodes(
+            '{index_name}',
+            $k,
+            $query_embedding
+        ) YIELD node, score
+        MATCH (node)-[:SIMILAR_TO]->(related_chunk:Chunk)
+        RETURN node.text AS text, node.metadata AS metadata, score,
+               related_chunk.text AS related_text, related_chunk.metadata AS related_metadata
+        ORDER BY score DESC
+        LIMIT $k
+        """
+        parameters = {
+            "query_embedding": query_embedding,
+            "k": k
+        }
+        with self.driver.session() as session:
+            results = session.run(query, parameters)
+            
+            processed_results = []
+            for record in results:
+                text = record.get("text", "")
+                metadata_raw = record.get("metadata")
+                related_text = record.get("related_text", "")
+                related_metadata_raw = record.get("related_metadata", "")
+                score = record.get("score", 0.0)
+                
+                processed_results.append({
+                    "text": text,
+                    "metadata": json.loads(metadata_raw) if metadata_raw else {},
+                    "related_text": related_text,
+                    "related_metadata": json.loads(related_metadata_raw) if related_metadata_raw else {},
+                    "score": score
+                })
+            
+            return processed_results
+        
     async def upload_document(self, file_or_content, filename=None):
         temp_dir = None
         try:
+            # Input fájl vagy tartalom feldolgozása
             if isinstance(file_or_content, UploadFile):
                 content = await file_or_content.read()
                 filename = file_or_content.filename
@@ -256,25 +355,18 @@ class VectorStoreManager:
                 raise ValueError("Invalid input type. Expected UploadFile or bytes.")
 
             file_extension = os.path.splitext(filename)[-1].lower()
-
-            # Supported file formats
             supported_formats = ['.pdf', '.docx', '.txt', '.md']
-
             if file_extension not in supported_formats:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
-            # Create a temporary directory for processing
+            # Ideiglenes könyvtár létrehozása
             temp_dir = f"/tmp/{filename}_temp"
             os.makedirs(temp_dir, exist_ok=True)
-
             temp_file_path = os.path.join(temp_dir, filename)
-
             with open(temp_file_path, "wb") as temp_file:
                 temp_file.write(content)
 
             documents = []
-
-            # Process the document based on its format
             if file_extension == ".pdf":
                 documents = self.load_pdf(temp_file_path)
             elif file_extension == ".docx":
@@ -282,13 +374,10 @@ class VectorStoreManager:
             elif file_extension in [".txt", ".md"]:
                 with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
                     text = txt_file.read()
-                    documents = [Document(text=text, metadata={"file_name": file.filename})]
-            else:
-                raise ValueError(f"Unsupported file format: {file_extension}")
+                    documents = [Document(text=text, metadata={"file_name": filename})]
 
-            # Chunk text with metadata
+            # Szöveg chunk-okra bontása
             def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
-                logging.info("Splitting text into chunks")
                 words = text.split()
                 chunks = []
                 for i in range(0, len(words), chunk_size):
@@ -302,36 +391,46 @@ class VectorStoreManager:
                     chunks.append(Document(text=chunk_content, metadata=metadata))
                 return chunks
 
+            # Chunk-ok létrehozása és mentése
             chunks = []
             for doc in documents:
-                logging.info(f'Processing document: {type(doc)}')
                 chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
 
-            # Create embeddings for chunks and add to vector store
-            for chunk in chunks:
-                logging.info('Creating embedding for chunk')
-                embedding = self.embedding.embed_query(chunk.text)
-                
-                # Mentés a Neo4j-ba
-                self.neo4j_manager.save_chunk(chunk.text, embedding, chunk.metadata)
+            previous_chunk_id = None
 
+            for idx, chunk in enumerate(chunks):
+                embedding = self.embedding.embed_query(chunk.text)
+                unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
+                chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
+
+                # Chunk mentése Neo4j-ba
+                self.neo4j_manager.save_chunk(
+                    chunk.text,
+                    embedding,
+                    {"chunk_id": chunk_id, **chunk.metadata}
+                )
+
+                # NEXT kapcsolat építése a létező metódussal
+                if previous_chunk_id:
+                    self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
+
+                previous_chunk_id = chunk_id
+            # Dokumentum kapcsolatok építése
             self.neo4j_manager.create_document_relationships()
+
+            # Hasonlósági kapcsolatok (SIMILAR_TO)
             self.neo4j_manager.create_similarity_relationships()
 
-            logging.info(f"Successfully uploaded and processed file.")
-            logging.info(f"Total chunks in vectorstore: {self.neo4j_manager.count_chunks()}")
+            logging.info(f"File '{filename}' feldolgozása befejeződött.")
+            logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
 
-        except ValueError as ve:
-            logging.error(f"Validation error: {str(ve)}", exc_info=True)
-            raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
             logging.error(f"Error uploading document: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal Server Error")
         finally:
-            # Remove the temporary directory and its contents
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
-
+    
     # Function to load data from .pdf files
     def load_pdf(self, filepath: str)-> List[Document]:
         import PyPDF2
