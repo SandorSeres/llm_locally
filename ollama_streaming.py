@@ -7,6 +7,8 @@ from fastapi.templating import Jinja2Templates
 import os
 import aiofiles
 import uuid
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from contextlib import asynccontextmanager
 from typing import Any, Dict, AsyncGenerator, Optional, List
@@ -367,10 +369,13 @@ async def get_upload_form():
         raise HTTPException(status_code=404, detail="upload.html not found")
 
 
-async def process_file(file_path: str, original_filename: str):
+
+async def process_file(file_path: str, original_filename: str) -> dict:
+    """Aszinkron fájl feldolgozás."""
     try:
         async with aiofiles.open(file_path, 'rb') as file:
             content = await file.read()
+            # Aszinkron művelet meghívása
             await rag.upload_document(content, filename=original_filename)
         return {"filename": original_filename, "status": "success"}
     except Exception as e:
@@ -379,8 +384,9 @@ async def process_file(file_path: str, original_filename: str):
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
-                        
+
 async def process_files_background(file_paths: List[tuple]):
+    """Aszinkron háttérfolyamat a fájlok feldolgozására."""
     for file_path, original_filename in file_paths:
         result = await process_file(file_path, original_filename)
         logger.info(f"{result['filename']} stored with status: {result['status']}")
@@ -388,6 +394,7 @@ async def process_files_background(file_paths: List[tuple]):
 
 @app.post("/upload/")
 async def upload_files(files: List[UploadFile], background_tasks: BackgroundTasks):
+    """Fájlok feltöltése és háttérfolyamat indítása."""
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
@@ -399,8 +406,9 @@ async def upload_files(files: List[UploadFile], background_tasks: BackgroundTask
             await out_file.write(content)
         temp_file_paths.append((temp_path, file.filename))
 
+    # Háttérfolyamat indítása aszinkron módon
     background_tasks.add_task(process_files_background, temp_file_paths)
-    
+
     return {"message": "File processing started in the background"}
 
 if __name__ == "__main__":

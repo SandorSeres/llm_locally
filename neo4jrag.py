@@ -145,6 +145,42 @@ class Neo4jManager:
             
             return processed_results
 
+    def create_document_relationships(self):
+        """
+        Create BELONGS_TO relationships between chunks and their document nodes.
+        Assumes 'file_name' is in the metadata of each chunk.
+        """
+        query = """
+        MATCH (chunk:Chunk)
+        WHERE chunk.metadata IS NOT NULL
+        WITH chunk, chunk.metadata.file_name AS file_name
+        WHERE file_name IS NOT NULL
+        MERGE (doc:Document {name: file_name})
+        MERGE (chunk)-[:BELONGS_TO]->(doc)
+        RETURN count(*) AS relationships_created
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            count = result.single()["relationships_created"]
+            logging.info(f"{count} BELONGS_TO relationships created successfully.")
+
+    def create_similarity_relationships(self, threshold: float = 0.8):
+        """
+        Create or update SIMILAR_TO relationships based on cosine similarity.
+        Avoid duplicate relationships and update similarity if already exists.
+        """
+        query = """
+        MATCH (c1:Chunk), (c2:Chunk)
+        WHERE id(c1) <> id(c2)
+        WITH c1, c2, cosineSimilarity(c1.embedding, c2.embedding) AS similarity
+        WHERE similarity > $threshold
+        MERGE (c1)-[r:SIMILAR_TO]->(c2)
+        ON CREATE SET r.similarity = similarity
+        ON MATCH SET r.similarity = similarity
+        """
+        with self.driver.session() as session:
+            session.run(query, {"threshold": threshold})
+            logging.info(f"SIMILAR_TO relationships created or updated for similarity > {threshold}")
     def execute_query(self, query: str, parameters: Optional[dict] = None) -> List[dict]:
         """Execute a generic Cypher query."""
         with self.driver.session() as session:
@@ -278,6 +314,9 @@ class VectorStoreManager:
                 
                 # Mentés a Neo4j-ba
                 self.neo4j_manager.save_chunk(chunk.text, embedding, chunk.metadata)
+
+            self.neo4j_manager.create_document_relationships()
+            self.neo4j_manager.create_similarity_relationships()
 
             logging.info(f"Successfully uploaded and processed file.")
             logging.info(f"Total chunks in vectorstore: {self.neo4j_manager.count_chunks()}")
