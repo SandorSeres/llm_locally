@@ -101,7 +101,8 @@ class Neo4jManager:
             )
         logging.info(f"Vector index '{index_name}' created successfully")
 
-    def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+    
+    def old_search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
         """Search for the most similar chunks using a vector index."""
         index_name = "chunk_embedding_index"
         query = f"""
@@ -151,6 +152,34 @@ class Neo4jManager:
                     "score": score
                 })
             
+            return processed_results
+
+    def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+        index_name = "chunk_embedding_index"
+        query = f"""
+        CALL db.index.vector.queryNodes('{index_name}', $k, $query_embedding)
+        YIELD node, score
+        RETURN node.text AS text, node.file_name AS file_name,
+               node.chunk_index AS chunk_index, node.chunk_start AS chunk_start,
+               node.chunk_end AS chunk_end, score
+        ORDER BY score DESC LIMIT $k
+        """
+        parameters = {"query_embedding": query_embedding, "k": k}
+        
+        with self.driver.session() as session:
+            results = session.run(query, parameters)
+            processed_results = []
+            for record in results:
+                processed_results.append({
+                    "text": record["text"],
+                    "metadata": {
+                        "file_name": record["file_name"],
+                        "chunk_index": record["chunk_index"],
+                        "chunk_start": record["chunk_start"],
+                        "chunk_end": record["chunk_end"]
+                    },
+                    "score": record["score"]
+                })
             return processed_results
 
     def create_document_relationships(self):

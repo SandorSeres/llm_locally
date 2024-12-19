@@ -273,6 +273,11 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
             "Answer the user question using the information in the context. "
             "If no context is available, use your own info.\n"
             f"Context:\n{rag_context}\n"
+            "You shouls all the time tell the source of the information\n"
+            "example:\n"
+            "<ANSware>\n"
+            "Source: <file1>, <file2>"
+             
         )
     })
     messages.append({"role": "user", "content": query})
