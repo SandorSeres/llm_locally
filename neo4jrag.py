@@ -46,6 +46,40 @@ class Neo4jManager:
         """Close the Neo4j connection."""
         self.driver.close()
 
+    def create_topics(self, topics: List[str]):
+        """
+        Create Topic nodes in Neo4j from a given list of topics.
+
+        Args:
+            topics (List[str]): A list of topic names to create.
+        """
+        query = """
+        UNWIND $topics AS topic_name
+        MERGE (t:Topic {name: topic_name})
+        RETURN count(*) AS topics_created
+        """
+        with self.driver.session() as session:
+            result = session.run(query, {"topics": topics})
+            count = result.single()["topics_created"]
+            logging.info(f"{count} topics created successfully.")
+
+    def link_chunk_to_topic(self, chunk_id: str, topic: str):
+        """
+        Link a chunk to a topic in the graph database.
+
+        Args:
+            chunk_id (str): The unique ID of the chunk.
+            topic (str): The name of the topic to link.
+        """
+        query = """
+        MATCH (chunk:Chunk {chunk_id: $chunk_id})
+        MATCH (topic:Topic {name: $topic})
+        MERGE (chunk)-[:RELATED_TO]->(topic)
+        """
+        with self.driver.session() as session:
+            session.run(query, {"chunk_id": chunk_id, "topic": topic})
+            logging.info(f"Chunk '{chunk_id}' linked to topic '{topic}'.")
+            
     def count_chunks(self) -> int:
         """Count the number of chunks in the database."""
         query = """
@@ -267,6 +301,156 @@ class Neo4jManager:
 
         return ranked_results[:k]
 
+    def advanced_search_with_topics(self, query_embedding: List[float], query_text: str, k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Combines embedding-based search with various graph relationships, question nodes,
+        and topic nodes for enhanced accuracy. Identifies relevant topics for the query using LLM.
+
+        Args:
+            query_embedding (List[float]): Query embedding vector.
+            query_text (str): The raw query text.
+            k (int): Number of top results to return.
+
+        Returns:
+            List[Dict[str, Any]]: Combined and ranked results from embedding, graph,
+                                  topic, and question-based searches.
+        """
+        # Step 1: Identify topics using LLM
+        try:
+            topics = self.identify_chunk_topics(query_text, self.neo4j_manager.get_all_topics())
+        except Exception as e:
+            logging.error(f"Error identifying topics for query: {str(e)}")
+            topics = []
+
+        # Step 2: Perform embedding-based search
+        embedding_results = self.search_chunks(query_embedding, k)
+        chunk_ids = [result['metadata']['chunk_index'] for result in embedding_results]
+
+        # Step 3: Graph relationship-based search
+        graph_query = """
+        MATCH (chunk:Chunk)-[:SIMILAR_TO|BELONGS_TO|NEXT]->(related_chunk:Chunk)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT related_chunk.text AS text, 
+               related_chunk.file_name AS file_name,
+               related_chunk.chunk_index AS chunk_index,
+               related_chunk.chunk_start AS chunk_start,
+               related_chunk.chunk_end AS chunk_end,
+               'graph' AS source
+        """
+        graph_results = self.execute_query(graph_query, {"chunk_ids": chunk_ids})
+
+        # Step 4: Document summaries
+        summary_query = """
+        MATCH (chunk:Chunk)-[:BELONGS_TO]->(doc:Document)-[:HAS_SUMMARY]->(summary:Summary)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT summary.text AS text,
+               doc.name AS document_name,
+               'summary' AS source
+        """
+        summary_results = self.execute_query(summary_query, {"chunk_ids": chunk_ids})
+
+        # Step 5: Generated questions
+        question_query = """
+        MATCH (chunk:Chunk)-[:GENERATES]->(q:Question)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT q.text AS text,
+               chunk.file_name AS file_name,
+               'question' AS source
+        """
+        question_results = self.execute_query(question_query, {"chunk_ids": chunk_ids})
+
+        # Step 6: Topic-based search
+        topic_query = """
+        MATCH (t:Topic)<-[:RELATED_TO]-(chunk:Chunk)
+        WHERE t.name IN $topics
+        RETURN DISTINCT chunk.text AS text, 
+               chunk.file_name AS file_name,
+               chunk.chunk_index AS chunk_index,
+               chunk.chunk_start AS chunk_start,
+               chunk.chunk_end AS chunk_end,
+               t.name AS topic_name,
+               'topic' AS source
+        """
+        topic_results = self.execute_query(topic_query, {"topics": topics})
+
+        # Step 7: Combine and rank results
+        combined_results = []
+
+        # Add embedding results
+        for result in embedding_results:
+            combined_results.append({
+                "text": result["text"],
+                "metadata": {
+                    "file_name": result["metadata"].get("file_name", "unknown"),
+                    "chunk_index": result["metadata"].get("chunk_index"),
+                    "chunk_start": result["metadata"].get("chunk_start"),
+                    "chunk_end": result["metadata"].get("chunk_end"),
+                },
+                "score": result["score"],
+                "source": "embedding"
+            })
+
+        # Add graph results
+        for record in graph_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "file_name": record.get("file_name", "unknown"),
+                    "chunk_index": record.get("chunk_index"),
+                    "chunk_start": record.get("chunk_start"),
+                    "chunk_end": record.get("chunk_end"),
+                },
+                "score": None,
+                "source": record.get("source", "graph")
+            })
+
+        # Add summaries
+        for record in summary_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "document_name": record["document_name"]
+                },
+                "score": None,
+                "source": record.get("source", "summary")
+            })
+
+        # Add questions
+        for record in question_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "file_name": record.get("file_name", "unknown"),
+                },
+                "score": None,
+                "source": record.get("source", "question")
+            })
+
+        # Add topic-based results
+        for record in topic_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "file_name": record.get("file_name", "unknown"),
+                    "topic_name": record.get("topic_name", "unknown"),
+                    "chunk_index": record.get("chunk_index"),
+                    "chunk_start": record.get("chunk_start"),
+                    "chunk_end": record.get("chunk_end"),
+                },
+                "score": None,
+                "source": record.get("source", "topic")
+            })
+
+        # Step 8: Rank results by relevance or additional criteria
+        ranked_results = sorted(
+            combined_results,
+            key=lambda x: x["score"] if x["score"] is not None else 0,
+            reverse=True
+        )
+
+        return ranked_results[:k]
+
+
     def create_document_relationships(self):
         """
         Create BELONGS_TO relationships between chunks and their document nodes.
@@ -469,27 +653,29 @@ class VectorStoreManager:
             logging.warning("Empty or invalid chunk text provided for question generation.")
             return []
 
-        llm = OpenAI(
-            model="gpt-4o",  # Használj megfelelő modellt
-            model_kwargs={"max_tokens": 512}
+        llm = ChatOpenAI(
+            model="gpt-4o",  # Chat modell
+            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
+            max_tokens=512  # Token limit
         )
-        prompt = PromptTemplate(
-            input_variables=["chunk"],
-            template="Based on the following text, generate up to 5 relevant questions:\n\n{chunk}\n\nQuestions:"
+
+        # Prompt szöveg közvetlen megadása
+        prompt = (
+            f"Based on the following text, generate up to {max_questions} relevant questions:\n\n"
+            f"{chunk_text}\n\nQuestions:"
         )
 
         try:
-            # Kérdések generálása
-            response = llm(prompt.format(chunk=chunk_text))
+            # LLM hívás az invoke metódussal
+            response = llm.invoke([HumanMessage(content=prompt)])
 
-            # Szétválasztás sorokra, whitespace eltávolítása, és csak nem üres sorok megtartása
-            questions = [q.strip() for q in response.split("\n") if q.strip()]
+            # Válasz feldolgozása
+            raw_output = response.content  # A válasz szövege
+            questions = [q.strip() for q in raw_output.split("\n") if q.strip()]
 
             # Maximum `max_questions` visszaadása
-            if len(questions) > max_questions:
-                questions = questions[:max_questions]
+            return questions[:max_questions]
 
-            return questions
         except Exception as e:
             logging.error(f"Error generating hypothetical questions: {str(e)}")
             return []  # Hiba esetén üres listát adunk vissza
@@ -642,7 +828,9 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    async def upload_document(self, file_or_content, filename=None):
+    TOPICS = ["geometria", "algebra", "calculus"]
+
+    async def upload_document(self, file_or_content, filename=None, topics=TOPICS):
         """ Több ezres dokumentum számhoz és százezres chunkhoz """
         temp_dir = None
         try:
@@ -694,6 +882,9 @@ class VectorStoreManager:
                     chunks.append(Document(text=chunk_content, metadata=metadata))
                 return chunks
 
+            # Topikok létrehozása
+            self.neo4j_manager.create_topics(topics)
+
             # Chunk-ok létrehozása és mentése
             chunks = []
             for doc in documents:
@@ -716,6 +907,11 @@ class VectorStoreManager:
                 # Hipotetikus kérdések generálása
                 questions = self.generate_hypothetical_questions(chunk.text)  
                 self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
+
+                # Kapcsolódás topikokhoz LLM segítségével
+                chunk_topics = self.identify_chunk_topics(chunk.text, topics)
+                for topic in chunk_topics:
+                    self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
 
                 # NEXT kapcsolat építése a létező metódussal
                 if previous_chunk_id:
@@ -744,6 +940,41 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
+    def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
+        """
+        Uses an LLM to identify which topics from the list are relevant to the chunk.
+
+        Args:
+            chunk_text (str): The text of the chunk.
+            topics (List[str]): List of topics to check.
+
+        Returns:
+            List[str]: Topics that are relevant to the chunk.
+        """
+        llm = ChatOpenAI(
+            model="gpt-4o",  # Chat modell
+            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
+            max_tokens=100  # Token limit
+        )
+        prompt = (
+            f"Given the text:\n\n{chunk_text}\n\n"
+            f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
+        )
+
+        try:
+            # LLM hívás az invoke metódussal
+            response = llm.invoke([HumanMessage(content=prompt)])
+
+            # Válasz feldolgozása
+            identified_topics = response.content.strip()  # Válasz szövegének elérése
+            relevant_topics = [topic.strip() for topic in identified_topics.split(",") if topic.strip() in topics]
+
+            return relevant_topics
+
+        except Exception as e:
+            logging.error(f"Error identifying topics for chunk: {str(e)}")
+            return []  # Hiba esetén üres listát adunk vissza
+           
     def periodic_full_rebuild(self):
         """
         Teljes similarity újragenerálása időszakosan.
