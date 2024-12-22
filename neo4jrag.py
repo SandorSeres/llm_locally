@@ -428,15 +428,45 @@ class VectorStoreManager:
             return processed_results
         
 
-    def generate_hypothetical_questions(self, chunk_text: str) -> List[str]:
-        llm = OpenAI()
+    def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
+        """
+        Generate hypothetical questions from a chunk of text using an LLM.
+
+        Args:
+            chunk_text (str): The text chunk to generate questions for.
+            max_questions (int): The maximum number of questions to return.
+
+        Returns:
+            List[str]: A list of generated questions (up to max_questions).
+        """
+        if not chunk_text.strip():
+            logging.warning("Empty or invalid chunk text provided for question generation.")
+            return []
+
+        llm = OpenAI(
+            model="gpt-4o",  # Használj megfelelő modellt
+            model_kwargs={"max_tokens": 512}
+        )
         prompt = PromptTemplate(
             input_variables=["chunk"],
-            template="Based on the following text, generate 3 relevant questions:\n\n{chunk}\n\nQuestions:"
+            template="Based on the following text, generate up to 5 relevant questions:\n\n{chunk}\n\nQuestions:"
         )
-        response = llm(prompt.format(chunk=chunk_text))
-        return response.split("\n")  # Szétválasztja a kérdéseket soronként
 
+        try:
+            # Kérdések generálása
+            response = llm(prompt.format(chunk=chunk_text))
+
+            # Szétválasztás sorokra, whitespace eltávolítása, és csak nem üres sorok megtartása
+            questions = [q.strip() for q in response.split("\n") if q.strip()]
+
+            # Maximum `max_questions` visszaadása
+            if len(questions) > max_questions:
+                questions = questions[:max_questions]
+
+            return questions
+        except Exception as e:
+            logging.error(f"Error generating hypothetical questions: {str(e)}")
+            return []  # Hiba esetén üres listát adunk vissza
 
 
     def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
@@ -485,7 +515,8 @@ class VectorStoreManager:
         return final_summary
 
 
-    async def upload_document(self, file_or_content, filename=None):
+    async def simple_upload_document(self, file_or_content, filename=None):
+        """ Nem túl nagy chunk szám és dokumentum számhoz """
         temp_dir = None
         try:
             # Input fájl vagy tartalom feldolgozása
@@ -584,6 +615,116 @@ class VectorStoreManager:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+
+    async def upload_document(self, file_or_content, filename=None):
+        """ Több ezres dokumentum számhoz és százezres chunkhoz """
+        temp_dir = None
+        try:
+            # Input fájl vagy tartalom feldolgozása
+            if isinstance(file_or_content, UploadFile):
+                content = await file_or_content.read()
+                filename = file_or_content.filename
+            elif isinstance(file_or_content, bytes):
+                content = file_or_content
+                if filename is None:
+                    raise ValueError("Filename must be provided when uploading bytes content")
+            else:
+                raise ValueError("Invalid input type. Expected UploadFile or bytes.")
+
+            file_extension = os.path.splitext(filename)[-1].lower()
+            supported_formats = ['.pdf', '.docx', '.txt', '.md']
+            if file_extension not in supported_formats:
+                raise ValueError(f"Unsupported file format: {file_extension}")
+
+            # Ideiglenes könyvtár létrehozása
+            temp_dir = f"/tmp/{filename}_temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file_path = os.path.join(temp_dir, filename)
+            with open(temp_file_path, "wb") as temp_file:
+                temp_file.write(content)
+
+            documents = []
+            if file_extension == ".pdf":
+                documents = self.load_pdf(temp_file_path)
+            elif file_extension == ".docx":
+                documents = self.load_docx(temp_file_path)
+            elif file_extension in [".txt", ".md"]:
+                with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
+                    text = txt_file.read()
+                    documents = [Document(text=text, metadata={"file_name": filename})]
+
+            # Szöveg chunk-okra bontása
+            def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
+                words = text.split()
+                chunks = []
+                for i in range(0, len(words), chunk_size):
+                    chunk_content = ' '.join(words[i:i + chunk_size])
+                    metadata = {
+                        "chunk_index": i // chunk_size,
+                        "chunk_start": i,
+                        "chunk_end": i + chunk_size,
+                        "file_name": file_name
+                    }
+                    chunks.append(Document(text=chunk_content, metadata=metadata))
+                return chunks
+
+            # Chunk-ok létrehozása és mentése
+            chunks = []
+            for doc in documents:
+                chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
+
+            previous_chunk_id = None
+
+            for idx, chunk in enumerate(chunks):
+                embedding = self.embedding.embed_query(chunk.text)
+                unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
+                chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
+
+                # Chunk mentése Neo4j-ba
+                self.neo4j_manager.save_chunk(
+                    chunk.text,
+                    embedding,
+                    {"chunk_id": chunk_id, **chunk.metadata}
+                )
+
+                # Hipotetikus kérdések generálása
+                questions = self.generate_hypothetical_questions(chunk.text)  
+                self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
+
+                # NEXT kapcsolat építése a létező metódussal
+                if previous_chunk_id:
+                    self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
+
+                previous_chunk_id = chunk_id
+            
+            # Dokumentum kapcsolatok építése
+            self.neo4j_manager.create_document_relationships()
+
+            # Hasonlósági kapcsolatok inkrementális építése
+            self.neo4j_manager.create_similarity_relationships(top_k=20, threshold=0.8)
+
+            # Dokumentum összefoglalójának létrehozása
+            document_text = " ".join([chunk.text for chunk in chunks])
+            summary = self.summarize_document(document_text)
+            self.neo4j_manager.save_summary_to_neo4j(filename, summary)
+
+            logging.info(f"File '{filename}' feldolgozása befejeződött.")
+            logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
+
+        except Exception as e:
+            logging.error(f"Error uploading document: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal Server Error")
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+
+    def periodic_full_rebuild(self):
+        """
+        Teljes similarity újragenerálása időszakosan.
+        """
+        self.rebuild_similarity_index()
+        self.create_similarity_relationships(top_k=50, threshold=0.8)
+        logging.info("Teljes hasonlósági gráf újragenerálva.")
     
     # Function to load data from .pdf files
     def load_pdf(self, filepath: str)-> List[Document]:
