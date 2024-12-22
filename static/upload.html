@@ -113,8 +113,14 @@
             const fileNamesDisplay = document.getElementById('fileNames');
 
             if (fileInput.files.length > 0) {
-                const names = Array.from(fileInput.files).map(file => file.name).join(", ");
-                fileNamesDisplay.textContent = `Kiválasztott fájlok: ${names}`;
+                // Törli a korábbi tartalmat
+                fileNamesDisplay.textContent = ''; 
+                // Új fájlnevek megjelenítése soronként
+                Array.from(fileInput.files).forEach(file => {
+                    const fileItem = document.createElement('div');
+                    fileItem.textContent = file.name;
+                    fileNamesDisplay.appendChild(fileItem);
+                });
             } else {
                 fileNamesDisplay.textContent = 'Nincs fájl kiválasztva';
             }

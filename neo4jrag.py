@@ -10,6 +10,14 @@ from langchain_openai import OpenAIEmbeddings
 import shutil
 from typing import List, Dict, Any
 import uuid
+from typing import List, Optional
+from neo4j import GraphDatabase
+from langchain.prompts import PromptTemplate
+from langchain.llms import OpenAI
+from langchain_community.llms import OpenAI
+from langchain_community.chat_models import ChatOpenAI
+from langchain.schema import HumanMessage
+
 #
 # http://localhost:7474/browser/
 #
@@ -21,11 +29,6 @@ logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)
     level=logging.INFO)
 
 
-import os
-import logging
-import json
-from typing import List, Optional
-from neo4j import GraphDatabase
 
 class Neo4jManager:
     def __init__(self, url: str = None, username: str = None, password: str = None, max_pool_size: int = 10):
@@ -79,6 +82,28 @@ class Neo4jManager:
             session.run(query, parameters)
             logging.info(f"Chunk '{metadata.get('chunk_id')}' successfully saved to Neo4j")
 
+    def save_questions_to_neo4j(self, chunk_id: str, questions: List[str]):
+        """
+        Save the generated questions to Neo4j and link them to the chunk.
+        """
+        query = """
+        MATCH (chunk:Chunk {chunk_id: $chunk_id})
+        UNWIND $questions AS question
+        MERGE (q:Question {text: question})
+        MERGE (chunk)-[:GENERATES]->(q)
+        """
+        with self.driver.session() as session:
+            session.run(query, {"chunk_id": chunk_id, "questions": questions})
+        logging.info(f"Questions for chunk '{chunk_id}' saved successfully.")
+
+    def save_summary_to_neo4j(self, document_name: str, summary_text: str):
+        query = """
+        MATCH (doc:Document {name: $document_name})
+        MERGE (summary:Summary {text: $summary_text})
+        MERGE (doc)-[:HAS_SUMMARY]->(summary)
+        """
+        with self.driver.session() as session:
+            session.run(query, {"document_name": document_name, "summary_text": summary_text})
 
     def create_vector_index(self, index_name: str, dimensions: int = 1536, similarity_function: str = 'cosine'):
         """Create a vector index in the database."""
@@ -102,57 +127,6 @@ class Neo4jManager:
         logging.info(f"Vector index '{index_name}' created successfully")
 
     
-    def old_search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
-        """Search for the most similar chunks using a vector index."""
-        index_name = "chunk_embedding_index"
-        query = f"""
-        CALL db.index.vector.queryNodes(
-            '{index_name}',
-            $k,
-            $query_embedding
-        ) YIELD node, score
-        RETURN node.text AS text, node.metadata AS metadata, score
-        ORDER BY score DESC
-        LIMIT $k
-        """
-        parameters = {
-            "query_embedding": query_embedding,
-            "k": k
-        }
-        with self.driver.session() as session:
-            results = session.run(query, parameters)
-            
-            processed_results = []
-            for record in results:
-                text = record.get("text", "")
-                metadata_raw = record.get("metadata")
-                score = record.get("score", 0.0)
-                
-                # Ellenőrizd, hogy a metadata nem None és valóban string-e
-                if metadata_raw is not None:
-                    if isinstance(metadata_raw, str):
-                        try:
-                            metadata = json.loads(metadata_raw)
-                        except json.JSONDecodeError as e:
-                            logging.error(f"JSON decoding failed for metadata: {metadata_raw} with error: {e}")
-                            metadata = {}
-                    elif isinstance(metadata_raw, dict):
-                        # Ha már dict, akkor nincs szükség json.loads-ra
-                        metadata = metadata_raw
-                    else:
-                        logging.warning(f"Unexpected metadata type: {type(metadata_raw)}. Metadata will be set to empty dict.")
-                        metadata = {}
-                else:
-                    logging.warning("Metadata is None. Setting metadata to empty dict.")
-                    metadata = {}
-                
-                processed_results.append({
-                    "text": text,
-                    "metadata": metadata,
-                    "score": score
-                })
-            
-            return processed_results
 
     def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
         index_name = "chunk_embedding_index"
@@ -182,6 +156,91 @@ class Neo4jManager:
                 })
             return processed_results
 
+    
+    def advanced_search(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Combines embedding-based search with various graph relationships for enhanced accuracy.
+
+        Args:
+            query_embedding (List[float]): Query embedding vector.
+            k (int): Number of top results to return.
+
+        Returns:
+            List[Dict[str, Any]]: Combined and ranked results from embedding and graph searches.
+        """
+        # Step 1: Perform embedding-based search
+        embedding_results = self.search_chunks(query_embedding, k)
+        chunk_ids = [result['metadata']['chunk_index'] for result in embedding_results]
+
+        # Step 2: Graph relationship-based search
+        graph_query = """
+        MATCH (chunk:Chunk)-[:SIMILAR_TO|BELONGS_TO|NEXT]->(related_chunk:Chunk)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT related_chunk.text AS text, 
+               related_chunk.file_name AS file_name,
+               related_chunk.chunk_index AS chunk_index,
+               related_chunk.chunk_start AS chunk_start,
+               related_chunk.chunk_end AS chunk_end,
+               'graph' AS source
+        """
+        graph_results = self.execute_query(graph_query, {"chunk_ids": chunk_ids})
+
+        # Step 3: Document summaries
+        summary_query = """
+        MATCH (chunk:Chunk)-[:BELONGS_TO]->(doc:Document)-[:HAS_SUMMARY]->(summary:Summary)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT summary.text AS text,
+               doc.name AS document_name,
+               'summary' AS source
+        """
+        summary_results = self.execute_query(summary_query, {"chunk_ids": chunk_ids})
+
+        # Step 4: Combine and rank results
+        combined_results = []
+
+        # Add embedding results
+        for result in embedding_results:
+            combined_results.append({
+                "text": result["text"],
+                "metadata": result["metadata"],
+                "score": result["score"],
+                "source": "embedding"
+            })
+
+        # Add graph results
+        for record in graph_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "file_name": record["file_name"],
+                    "chunk_index": record["chunk_index"],
+                    "chunk_start": record["chunk_start"],
+                    "chunk_end": record["chunk_end"]
+                },
+                "score": None,
+                "source": record.get("source", "graph")
+            })
+
+        # Add summaries
+        for record in summary_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "document_name": record["document_name"]
+                },
+                "score": None,
+                "source": record.get("source", "summary")
+            })
+
+        # Step 5: (Optional) Rank results by relevance or additional criteria
+        ranked_results = sorted(
+            combined_results,
+            key=lambda x: x["score"] if x["score"] is not None else 0,
+            reverse=True
+        )
+
+        return ranked_results[:k]
+
     def create_document_relationships(self):
         """
         Create BELONGS_TO relationships between chunks and their document nodes.
@@ -199,15 +258,13 @@ class Neo4jManager:
             count = result.single()["relationships_created"]
             logging.info(f"{count} BELONGS_TO relationships created successfully.")
 
-    def create_similarity_relationships(self, index_name: str = "chunk_embedding_index", threshold: float = 0.8):
-        """
-        Create SIMILAR_TO relationships based on vector index similarity.
-        """
+
+    def create_similarity_relationships(self, index_name: str = "chunk_embedding_index", top_k: int = 10, threshold: float = 0.8):
         query = f"""
         MATCH (c1:Chunk)
         CALL db.index.vector.queryNodes(
             '{index_name}',
-            10, // Top 10 hasonló chunk
+            $top_k,
             c1.embedding
         ) YIELD node, score
         WHERE score > $threshold AND node <> c1
@@ -215,8 +272,9 @@ class Neo4jManager:
         ON CREATE SET r.similarity = score
         """
         with self.driver.session() as session:
-            session.run(query, {"threshold": threshold})
-            logging.info(f"SIMILAR_TO relationships created with similarity threshold > {threshold}")
+            session.run(query, {"top_k": top_k, "threshold": threshold})
+            logging.info(f"SIMILAR_TO relationships created for top {top_k} chunks with similarity threshold > {threshold}")
+
 
     def create_next_relationship(self, prev_chunk_id: str, current_chunk_id: str):
         """
@@ -289,7 +347,7 @@ class VectorStoreManager:
             query_embedding = self.embedding.embed_query(query)
             
             # Keresés Neo4j-ban
-            results = self.neo4j_manager.search_chunks(query_embedding)
+            results = self.neo4j_manager.advanced_search(query_embedding)
             
             # Csak a top-k eredményt adja vissza
             return results[:k]
@@ -369,6 +427,64 @@ class VectorStoreManager:
             
             return processed_results
         
+
+    def generate_hypothetical_questions(self, chunk_text: str) -> List[str]:
+        llm = OpenAI()
+        prompt = PromptTemplate(
+            input_variables=["chunk"],
+            template="Based on the following text, generate 3 relevant questions:\n\n{chunk}\n\nQuestions:"
+        )
+        response = llm(prompt.format(chunk=chunk_text))
+        return response.split("\n")  # Szétválasztja a kérdéseket soronként
+
+
+
+    def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
+        """
+        Summarize a document while handling token limits by breaking it into smaller chunks.
+
+        Args:
+            document_text (str): The text of the document to summarize.
+            chunk_size (int): The maximum number of tokens for each chunk.
+
+        Returns:
+            str: The final summarized text of the entire document.
+        """
+        llm = ChatOpenAI(
+            model="gpt-4o",  # Chat modell
+            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
+            max_tokens=512  # Token limit
+        )
+        
+        # Step 1: Split document into manageable chunks
+        words = document_text.split()
+        chunks = [
+            " ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)
+        ]
+
+        # Step 2: Generate summaries for each chunk
+        chunk_summaries = []
+        for chunk in chunks:
+            try:
+                response = llm([HumanMessage(content=f"Summarize the following text in 3 sentences:\n\n{chunk}")])
+                summary = response.content.strip()  # Az összefoglaló szöveg
+                chunk_summaries.append(summary)
+            except Exception as e:
+                logging.error(f"Error summarizing chunk: {str(e)}")
+                chunk_summaries.append("Error summarizing this chunk.")
+
+        # Step 3: Combine chunk summaries into a single summary
+        combined_summaries = "\n".join(chunk_summaries)  # Külön változó a summarizált szövegekhez
+        try:
+            response = llm([HumanMessage(content=f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}")])
+            final_summary = response.content.strip()
+        except Exception as e:
+            logging.error(f"Error creating final summary: {str(e)}")
+            final_summary = "Error generating summary."
+        
+        return final_summary
+
+
     async def upload_document(self, file_or_content, filename=None):
         temp_dir = None
         try:
@@ -439,6 +555,10 @@ class VectorStoreManager:
                     {"chunk_id": chunk_id, **chunk.metadata}
                 )
 
+                # Hipotetikus kérdések generálása
+                questions = self.generate_hypothetical_questions(chunk.text)  
+                self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
+
                 # NEXT kapcsolat építése a létező metódussal
                 if previous_chunk_id:
                     self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
@@ -447,8 +567,13 @@ class VectorStoreManager:
             # Dokumentum kapcsolatok építése
             self.neo4j_manager.create_document_relationships()
 
-            # Hasonlósági kapcsolatok (SIMILAR_TO)
-            self.neo4j_manager.create_similarity_relationships()
+            # Hasonlósági kapcsolatok építése
+            self.neo4j_manager.create_similarity_relationships(top_k=10, threshold=0.8)
+
+            # Dokumentum összefoglalójának létrehozása
+            document_text = " ".join([chunk.text for chunk in chunks])
+            summary = self.summarize_document(document_text)
+            self.neo4j_manager.save_summary_to_neo4j(filename, summary)
 
             logging.info(f"File '{filename}' feldolgozása befejeződött.")
             logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
