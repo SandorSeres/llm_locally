@@ -159,7 +159,7 @@ class Neo4jManager:
     
     def advanced_search(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
         """
-        Combines embedding-based search with various graph relationships for enhanced accuracy.
+        Combines embedding-based search with various graph relationships and includes question nodes for enhanced accuracy.
 
         Args:
             query_embedding (List[float]): Query embedding vector.
@@ -195,14 +195,29 @@ class Neo4jManager:
         """
         summary_results = self.execute_query(summary_query, {"chunk_ids": chunk_ids})
 
-        # Step 4: Combine and rank results
+        # Step 4: Generated questions
+        question_query = """
+        MATCH (chunk:Chunk)-[:GENERATES]->(q:Question)
+        WHERE chunk.chunk_index IN $chunk_ids
+        RETURN DISTINCT q.text AS text,
+               chunk.file_name AS file_name,
+               'question' AS source
+        """
+        question_results = self.execute_query(question_query, {"chunk_ids": chunk_ids})
+
+        # Step 5: Combine and rank results
         combined_results = []
 
         # Add embedding results
         for result in embedding_results:
             combined_results.append({
                 "text": result["text"],
-                "metadata": result["metadata"],
+                "metadata": {
+                    "file_name": result["metadata"].get("file_name", "unknown"),
+                    "chunk_index": result["metadata"].get("chunk_index"),
+                    "chunk_start": result["metadata"].get("chunk_start"),
+                    "chunk_end": result["metadata"].get("chunk_end"),
+                },
                 "score": result["score"],
                 "source": "embedding"
             })
@@ -212,10 +227,10 @@ class Neo4jManager:
             combined_results.append({
                 "text": record["text"],
                 "metadata": {
-                    "file_name": record["file_name"],
-                    "chunk_index": record["chunk_index"],
-                    "chunk_start": record["chunk_start"],
-                    "chunk_end": record["chunk_end"]
+                    "file_name": record.get("file_name", "unknown"),
+                    "chunk_index": record.get("chunk_index"),
+                    "chunk_start": record.get("chunk_start"),
+                    "chunk_end": record.get("chunk_end"),
                 },
                 "score": None,
                 "source": record.get("source", "graph")
@@ -232,7 +247,18 @@ class Neo4jManager:
                 "source": record.get("source", "summary")
             })
 
-        # Step 5: (Optional) Rank results by relevance or additional criteria
+        # Add questions
+        for record in question_results:
+            combined_results.append({
+                "text": record["text"],
+                "metadata": {
+                    "file_name": record.get("file_name", "unknown"),
+                },
+                "score": None,
+                "source": record.get("source", "question")
+            })
+
+        # Step 6: (Optional) Rank results by relevance or additional criteria
         ranked_results = sorted(
             combined_results,
             key=lambda x: x["score"] if x["score"] is not None else 0,
