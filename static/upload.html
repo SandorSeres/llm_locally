@@ -95,10 +95,20 @@
 </head>
 
 <body>
-    <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+    <form id="uploadForm" method="POST" enctype="multipart/form-data">
+        <div>
+            <label for="uploadType">Válassza ki a feltöltés típusát:</label>
+            <select id="uploadType" name="uploadType" required>
+                <option value="">Válasszon...</option>
+                <option value="document">Dokumentum</option>
+                <option value="topic">Topic</option>
+            </select>
+        </div>
+
         <label for="fileUpload">Fájlok kiválasztása</label>
         <input id="fileUpload" class="file-input" type="file" name="files" multiple onchange="updateFileNames()">
         <div id="fileNames">Nincs fájl kiválasztva</div>
+
         <input type="submit" value="Feltöltés">
     </form>
 
@@ -113,9 +123,7 @@
             const fileNamesDisplay = document.getElementById('fileNames');
 
             if (fileInput.files.length > 0) {
-                // Törli a korábbi tartalmat
-                fileNamesDisplay.textContent = ''; 
-                // Új fájlnevek megjelenítése soronként
+                fileNamesDisplay.textContent = '';
                 Array.from(fileInput.files).forEach(file => {
                     const fileItem = document.createElement('div');
                     fileItem.textContent = file.name;
@@ -125,8 +133,25 @@
                 fileNamesDisplay.textContent = 'Nincs fájl kiválasztva';
             }
         }
+
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            const uploadType = document.getElementById('uploadType').value;
+            const form = event.target;
+
+            if (!uploadType) {
+                alert('Kérjük, válasszon feltöltési típust!');
+                return;
+            }
+
+            // Beállítja az endpointot a feltöltési típus alapján
+            const actionUrl = uploadType === 'document' ? '/upload' : '/upload_topics/';
+            form.action = actionUrl;
+
+            form.submit();
+        });
     </script>
 </body>
 
 </html>
-

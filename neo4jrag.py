@@ -541,14 +541,76 @@ class SessionManager:
             return {"history": json.loads(history_json)}
         return None
 
+class TopicManager:
+    def __init__(self, neo4j_manager: Neo4jManager):
+        self.neo4j_manager = neo4j_manager
+        self.topics = []
+
+    def load_topics_from_file(self, filepath: str) -> List[str]:
+        """
+        Load topics from a text or JSON file.
+        Args:
+            filepath (str): Path to the file containing topics.
+
+        Returns:
+            List[str]: A list of topics.
+        """
+        try:
+            with open(filepath, 'r', encoding='utf-8') as file:
+                if filepath.endswith(".json"):
+                    self.topics = json.load(file).get("topics", [])
+                else:
+                    self.topics = [line.strip() for line in file.readlines() if line.strip()]
+            logging.info(f"{len(self.topics)} topics loaded successfully from {filepath}.")
+        except Exception as e:
+            logging.error(f"Error loading topics from file: {str(e)}", exc_info=True)
+        return self.topics
+
+    def save_topics_to_file(self, filepath: str):
+        """
+        Save the current list of topics to a file.
+        Args:
+            filepath (str): Path to the file to save topics.
+        """
+        try:
+            if filepath.endswith(".json"):
+                with open(filepath, 'w', encoding='utf-8') as file:
+                    json.dump({"topics": self.topics}, file, ensure_ascii=False, indent=4)
+            else:
+                with open(filepath, 'w', encoding='utf-8') as file:
+                    file.writelines([f"{topic}\n" for topic in self.topics])
+            logging.info(f"{len(self.topics)} topics saved to {filepath}.")
+        except Exception as e:
+            logging.error(f"Error saving topics to file: {str(e)}", exc_info=True)
+
+    def create_topics_in_neo4j(self):
+        """
+        Create topics in the Neo4j database.
+        """
+        if not self.topics:
+            logging.warning("No topics to create in Neo4j.")
+            return
+        self.neo4j_manager.create_topics(self.topics)
+        logging.info("Topics successfully created in Neo4j.")
+
 
 class VectorStoreManager:
     def __init__(self, neo4j_manager: Neo4jManager):
         self.neo4j_manager = neo4j_manager
+        self.topic_manager = topic_manager  # Új attribútum
         self.embedding = OpenAIEmbeddings()
+
         # Vektorindex létrehozása
         self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=1536)
 
+    def upload_new_topics(self, filepath: str):
+            """
+            Upload new topics from a file and create them in the Neo4j database.
+            """
+            new_topics = self.topic_manager.load_topics_from_file(filepath)
+            self.topic_manager.create_topics_in_neo4j()
+            return new_topics
+            
     def search(self, query: str, k: int = 3) -> List[dict]:
         try:
             logging.info(f"Starting search method for query: {query}")
@@ -557,7 +619,7 @@ class VectorStoreManager:
             query_embedding = self.embedding.embed_query(query)
             
             # Keresés Neo4j-ban
-            results = self.neo4j_manager.advanced_search(query_embedding)
+            results = self.neo4j_manager.advanced_search_with_topics(query_embedding)
             
             # Csak a top-k eredményt adja vissza
             return results[:k]
@@ -929,6 +991,14 @@ class VectorStoreManager:
             document_text = " ".join([chunk.text for chunk in chunks])
             summary = self.summarize_document(document_text)
             self.neo4j_manager.save_summary_to_neo4j(filename, summary)
+
+            for chunk in chunks:
+                chunk_topics = self.identify_chunk_topics(chunk.text, self.topic_manager.topics)
+                for topic in chunk_topics:
+                    self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
+
+            logging.info("Document and topics processed successfully.")
+
 
             logging.info(f"File '{filename}' feldolgozása befejeződött.")
             logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")

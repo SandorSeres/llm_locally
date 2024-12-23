@@ -43,7 +43,7 @@ model_options = {
 rag = None
 session_manager = None
 neo4j_manager = None
-
+topic_manager = None
 class ModelManager:
     """
     ModelManager osztály arra, hogy a választott modell (OpenAI vagy Ollama) alapján
@@ -189,7 +189,7 @@ class ModelManager:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logika
-    global rag, session_manager, neo4j_manager
+    global rag, session_manager, neo4j_manager , topic_manager
     logger.info("App startup")
     try:
         time.sleep(10)
@@ -200,7 +200,10 @@ async def lifespan(app: FastAPI):
         )
         session_manager = SessionManager(neo4j_manager)
         logger.info("Session manager started")
+        topic_manager = TopicManager(neo4j_manager)
+        logger.info("TopicManager started")
         rag = VectorStoreManager(neo4j_manager)
+        rag.topic_manager = topic_manager
         logger.info("VectorStoreManager started")
     except Exception as e:
         logger.error(f"Failed to initialize Neo4jRAG: {e}")
@@ -363,6 +366,19 @@ async def read_index(request: Request):
     response.set_cookie(key="session_id", value=session_id, httponly=True, path="/")
     return response
         
+@app.post("/upload_topics/")
+async def upload_topics(file: UploadFile):
+    try:
+        filepath = f"/tmp/{file.filename}"
+        with open(filepath, "wb") as buffer:
+            buffer.write(await file.read())
+        new_topics = topic_manager.load_topics_from_file(filepath)
+        topic_manager.create_topics_in_neo4j()
+        return {"message": f"{len(new_topics)} topics uploaded successfully."}
+    except Exception as e:
+        logging.error(f"Error uploading topics: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error uploading topics.")
+
 @app.get("/upload/")
 async def get_upload_form():
     """
@@ -402,6 +418,11 @@ async def upload_files(files: List[UploadFile], background_tasks: BackgroundTask
     """Fájlok feltöltése és háttérfolyamat indítása."""
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
+
+    supported_formats = ['.pdf', '.docx', '.txt', '.md']
+    for file in files:
+        if not any(file.filename.endswith(ext) for ext in supported_formats):
+            raise HTTPException(status_code=400, detail=f"Unsupported file format: {file.filename}")
 
     temp_file_paths = []
     for file in files:
