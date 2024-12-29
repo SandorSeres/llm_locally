@@ -6,13 +6,11 @@ RUN apt update && apt install  bash procps coreutils
 # majd lehúzzuk a modelleket, végül leállítjuk a szervert.
 RUN (ollama serve &); \
     sleep 5; \
-    echo "gemma2" && \
-    ollama pull gemma2 && \
-    echo "mistral-nemo" && \
-    ollama pull mistral-nemo && \
-    echo "llama3.2" && \
-    ollama pull llama3.2 && \
-    echo "Done" && \
+    echo "embedding"; \
+    ollama pull nomic-embed-text; \
+    echo "llama3.2" ; \
+    ollama pull llama3.2 ; \
+    echo "Done" ; \
     pkill ollama
 
 # Ha minden modell sikeresen letöltődött, akkor a CMD-ben már csak a szervert indítjuk.

@@ -1,5 +1,6 @@
 # Standard könyvtárak
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile
+from fastapi import File,  HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -117,7 +118,7 @@ class ModelManager:
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
         async with httpx.AsyncClient(timeout=None) as client:
             try:
-                logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}")
+                logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}", exc_info=True)
                 response = await client.post(
                     self.ollama_api_url,
                     json={
@@ -133,12 +134,12 @@ class ModelManager:
                     if not line:
                         continue
 
-                    logger.info(f"Streamed line: {line}")  # Ellenőrzés
+                    logger.info(f"Streamed line: {line}", exc_info=True)  # Ellenőrzés
 
                     try:
                         data = json.loads(line)
                     except json.JSONDecodeError:
-                        logger.warning(f"Ollama válasz nem JSON: {line}")
+                        logger.warning(f"Ollama válasz nem JSON: {line}", exc_info=True)
                         continue
 
                     # Stream végének kezelése
@@ -158,7 +159,7 @@ class ModelManager:
                             ]
                         }
             except httpx.RequestError as e:
-                logger.error(f"Ollama request error: {e}")
+                logger.error(f"Ollama request error: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail="Ollama API hiba.")
 
 
@@ -174,8 +175,8 @@ class ModelManager:
             "frequency_penalty": 0,
             "presence_penalty": 0,
         }
-        logger.info(messages)
-        logger.info(f"Body: {body} Header: {headers} URL: {self.openai_api_url}")
+        logger.info(messages, exc_info=True)
+        logger.info(f"Body: {body} Header: {headers} URL: {self.openai_api_url}", exc_info=True)
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", self.openai_api_url, headers=headers, json=body) as response:
                 #if response.status_code != 200:
@@ -188,30 +189,48 @@ class ModelManager:
 # FastAPI lifecycle események
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logika
-    global rag, session_manager, neo4j_manager , topic_manager
-    logger.info("App startup")
+    global rag, session_manager, neo4j_manager, topic_manager
+    logger.info("App startup", exc_info=True)
     try:
-        time.sleep(10)
+        time.sleep(10)  # Biztosítja, hogy a Neo4j már elindult
+        # Neo4jManager inicializálása
         neo4j_manager = Neo4jManager(
             url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             username=os.getenv("NEO4J_USERNAME", "neo4j"),
             password=os.getenv("NEO4J_PASSWORD", "password"),
         )
+        logger.info("Neo4jManager initialized successfully", exc_info=True)
+
+        # SessionManager inicializálása
         session_manager = SessionManager(neo4j_manager)
-        logger.info("Session manager started")
+        logger.info("SessionManager initialized successfully", exc_info=True)
+
+        # TopicManager inicializálása
         topic_manager = TopicManager(neo4j_manager)
-        logger.info("TopicManager started")
-        rag = VectorStoreManager(neo4j_manager)
-        rag.topic_manager = topic_manager
-        logger.info("VectorStoreManager started")
+        logger.info("TopicManager initialized successfully", exc_info=True)
+
+        # VectorStoreManager inicializálása
+        rag = VectorStoreManager(neo4j_manager, topic_manager)  # Átadjuk a TopicManager példányt
+        logger.info("VectorStoreManager initialized successfully")
+
     except Exception as e:
-        logger.error(f"Failed to initialize Neo4jRAG: {e}")
+        logger.error(f"Failed to initialize components: {e}", exc_info=True)
         rag = None
         session_manager = None
+        topic_manager = None
+        neo4j_manager = None
+
     yield
+
     # Shutdown logika
-    logger.info("App shutdown")
+    try:
+        if neo4j_manager:
+            neo4j_manager.close()
+            logger.info("Neo4jManager closed successfully", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}", exc_info=True)
+
+    logger.info("App shutdown", exc_info=True)
 
 app = FastAPI(lifespan=lifespan)
 
@@ -265,7 +284,7 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
         rag_context = rag.search(query, k=3)
     except Exception as e:
         rag_context = "No relevant context found in RAG database."
-        logger.warning(f"RAG search failed: {e}")
+        logger.warning(f"RAG search failed: {e}", exc_info=True)
 
     history = session_data.get("history", [])
 
@@ -287,7 +306,7 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
 
     local_model_manager = ModelManager(
         model_type=model_type or os.getenv("MODEL_TYPE", "ollama"),
-        model_name=model_name or os.getenv("MODEL_NAME", "mistral")
+        model_name=model_name or os.getenv("MODEL_NAME", "llama3.2")
     )
 
     full_response = ""
@@ -296,7 +315,7 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
         if isinstance(chunk, bytes):
             decoded = chunk.decode("utf-8", errors="ignore")
             lines = decoded.strip().split("\n")
-            logger.info(f"lines:{lines}")
+            logger.info(f"lines:{lines}", exc_info=True)
             for line in lines:
                 if line.startswith("data: "):
                     data_str = line[6:]
@@ -343,7 +362,7 @@ async def generate(query: QueryModel, request: Request):
     session_data = get_session(session_id)
     if not session_data:
         raise HTTPException(status_code=403, detail="Session not found")
-    logger.info(f"Using session data: {session_data}")
+    logger.info(f"Using session data: {session_data}", exc_info=True)
 
     return StreamingResponse(
         generate_response_stream(query.query, session_id, session_data, query.model_type, query.model_name),
@@ -378,7 +397,7 @@ async def upload_topics(file: UploadFile):
     except Exception as e:
         logging.error(f"Error uploading topics: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error uploading topics.")
-
+               
 @app.get("/upload/")
 async def get_upload_form():
     """
@@ -400,7 +419,7 @@ async def process_file(file_path: str, original_filename: str) -> dict:
             await rag.upload_document(content, filename=original_filename)
         return {"filename": original_filename, "status": "success"}
     except Exception as e:
-        logger.error(f"Error processing {original_filename}: {str(e)}")
+        logger.error(f"Error processing {original_filename}: {str(e)}", exc_info=True)
         return {"filename": original_filename, "status": f"error: {str(e)}"}
     finally:
         if os.path.exists(file_path):
@@ -410,8 +429,8 @@ async def process_files_background(file_paths: List[tuple]):
     """Aszinkron háttérfolyamat a fájlok feldolgozására."""
     for file_path, original_filename in file_paths:
         result = await process_file(file_path, original_filename)
-        logger.info(f"{result['filename']} stored with status: {result['status']}")
-    logger.info("File upload process finished.")
+        logger.info(f"{result['filename']} stored with status: {result['status']}", exc_info=True)
+    logger.info("File upload process finished.", exc_info=True)
 
 @app.post("/upload/")
 async def upload_files(files: List[UploadFile], background_tasks: BackgroundTasks):
@@ -421,6 +440,7 @@ async def upload_files(files: List[UploadFile], background_tasks: BackgroundTask
 
     supported_formats = ['.pdf', '.docx', '.txt', '.md']
     for file in files:
+        logger.info(file.filename)
         if not any(file.filename.endswith(ext) for ext in supported_formats):
             raise HTTPException(status_code=400, detail=f"Unsupported file format: {file.filename}")
 

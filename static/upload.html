@@ -134,24 +134,57 @@
             }
         }
 
-        document.getElementById('uploadForm').addEventListener('submit', function(event) {
-            event.preventDefault();
+    document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+        event.preventDefault();
 
-            const uploadType = document.getElementById('uploadType').value;
-            const form = event.target;
+        const uploadType = document.getElementById('uploadType').value;
+        const fileInput = document.getElementById('fileUpload');
 
-            if (!uploadType) {
-                alert('Kérjük, válasszon feltöltési típust!');
-                return;
+        if (!uploadType) {
+            alert('Kérjük, válasszon feltöltési típust!');
+            return;
+        }
+
+        if (fileInput.files.length === 0) {
+            alert('Kérjük, válasszon legalább egy fájlt!');
+            return;
+        }
+
+        const formData = new FormData();
+
+        if (uploadType === 'document') {
+            // Ha 'document', akkor fájllistát küldünk
+            for (let i = 0; i < fileInput.files.length; i++) {
+                formData.append('files', fileInput.files[i]); // Egyezzen a backend mezőnévvel
             }
+        } else if (uploadType === 'topic') {
+            // Ha 'topic', csak az első fájlt küldjük
+            formData.append('file', fileInput.files[0]); // Egyezzen a backend mezőnévvel
+        }
+        //console.info("formData:",formData)
+        const actionUrl = uploadType === 'document' ? '/upload' : '/upload_topics/';
 
-            // Beállítja az endpointot a feltöltési típus alapján
-            const actionUrl = uploadType === 'document' ? '/upload' : '/upload_topics/';
-            form.action = actionUrl;
+        try {
+            const response = await fetch(actionUrl, {
+                method: 'POST',
+                body: formData,
+            });
 
-            form.submit();
-        });
-    </script>
+            if (response.ok) {
+                const result = await response.json();
+                alert(`Sikeres feltöltés: ${result.message || 'Fájlok feltöltve!'}`);
+            } else {
+                const error = await response.json();
+                console.error('Error response:', error);
+                alert(`Hiba történt: ${error.detail || 'Ismeretlen hiba.'}`);
+            }
+        } catch (error) {
+            console.error('Fetch error:', error);
+            alert('Hiba történt a fájl feltöltése során.');
+        }
+    });
+        </script>
+
 </body>
 
 </html>

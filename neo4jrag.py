@@ -17,6 +17,8 @@ from langchain.llms import OpenAI
 from langchain_community.llms import OpenAI
 from langchain_community.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage
+import httpx
+import asyncio
 
 #
 # http://localhost:7474/browser/
@@ -593,25 +595,60 @@ class TopicManager:
         self.neo4j_manager.create_topics(self.topics)
         logging.info("Topics successfully created in Neo4j.")
 
+class EmbeddingGenerator:
+    """
+    Egy általános osztály az Ollama API használatához embedding generálására.
+    """
+    def __init__(self, api_url: str = None, embedding_size: int = 768):
+        self.api_url = api_url
+        self.embedding_size = embedding_size
+
+    def embed_query(self, text):
+        url = "http://ollama:11434/api/embeddings"  # Állítsd be a megfelelő címet
+        
+        payload = {
+            "model": "nomic-embed-text",  # Vagy a használni kívánt embedding modell neve ,768
+            "prompt": text
+        }
+        
+        with httpx.Client() as client:  # Szinkron kliens használata
+            response = client.post(url, json=payload)
+            
+        if response.status_code == 200:
+            result = response.json()
+            return result["embedding"]
+        else:
+            raise Exception(f"Hiba történt: {response.status_code}, {response.text}")
 
 class VectorStoreManager:
-    def __init__(self, neo4j_manager: Neo4jManager):
+    def __init__(self, neo4j_manager: Neo4jManager, topic_manager: TopicManager):
         self.neo4j_manager = neo4j_manager
-        self.topic_manager = topic_manager  # Új attribútum
-        self.embedding = OpenAIEmbeddings()
+        self.topic_manager = topic_manager  # A lifespan-ből kapja a példányt
+        api_url= os.getenv("OLLAMA_EMBEDDING_API_URL","")
+        self.embedding = EmbeddingGenerator(api_url=api_url)  # EmbeddingGenerator használata
 
         # Vektorindex létrehozása
-        self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=1536)
+        self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=self.embedding.embedding_size)
 
     def upload_new_topics(self, filepath: str):
-            """
-            Upload new topics from a file and create them in the Neo4j database.
-            """
-            new_topics = self.topic_manager.load_topics_from_file(filepath)
-            self.topic_manager.create_topics_in_neo4j()
-            return new_topics
-            
+        """
+        Új témák feltöltése és Neo4j adatbázisban történő létrehozása.
+        """
+        new_topics = self.topic_manager.load_topics_from_file(filepath)
+        self.topic_manager.create_topics_in_neo4j()
+        return new_topics
+
     def search(self, query: str, k: int = 3) -> List[dict]:
+        """
+        Keresés egy lekérdezés alapján.
+        
+        Args:
+            query (str): A felhasználói kérdés.
+            k (int): Az eredmények maximális száma.
+
+        Returns:
+            List[dict]: A top-k keresési eredmények.
+        """
         try:
             logging.info(f"Starting search method for query: {query}")
             
@@ -849,7 +886,7 @@ class VectorStoreManager:
             previous_chunk_id = None
 
             for idx, chunk in enumerate(chunks):
-                embedding = self.embedding.embed_query(chunk.text)
+                embedding = await self.embedding.embed_query(chunk.text)
                 unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
                 chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
 
@@ -891,115 +928,115 @@ class VectorStoreManager:
                 shutil.rmtree(temp_dir)
 
 
-async def upload_document(self, file_or_content, filename=None):
-    """ Több ezres dokumentum számhoz és százezres chunkhoz """
-    temp_dir = None
-    try:
-        # Input fájl vagy tartalom feldolgozása
-        if isinstance(file_or_content, UploadFile):
-            content = await file_or_content.read()
-            filename = file_or_content.filename
-        elif isinstance(file_or_content, bytes):
-            content = file_or_content
-            if filename is None:
-                raise ValueError("Filename must be provided when uploading bytes content")
-        else:
-            raise ValueError("Invalid input type. Expected UploadFile or bytes.")
+    async def upload_document(self, file_or_content, filename=None):
+        """ Több ezres dokumentum számhoz és százezres chunkhoz """
+        temp_dir = None
+        try:
+            # Input fájl vagy tartalom feldolgozása
+            if isinstance(file_or_content, UploadFile):
+                content = await file_or_content.read()
+                filename = file_or_content.filename
+            elif isinstance(file_or_content, bytes):
+                content = file_or_content
+                if filename is None:
+                    raise ValueError("Filename must be provided when uploading bytes content")
+            else:
+                raise ValueError("Invalid input type. Expected UploadFile or bytes.")
 
-        file_extension = os.path.splitext(filename)[-1].lower()
-        supported_formats = ['.pdf', '.docx', '.txt', '.md']
-        if file_extension not in supported_formats:
-            raise ValueError(f"Unsupported file format: {file_extension}")
+            file_extension = os.path.splitext(filename)[-1].lower()
+            supported_formats = ['.pdf', '.docx', '.txt', '.md']
+            if file_extension not in supported_formats:
+                raise ValueError(f"Unsupported file format: {file_extension}")
 
-        # Ideiglenes könyvtár létrehozása
-        temp_dir = f"/tmp/{filename}_temp"
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_file_path = os.path.join(temp_dir, filename)
-        with open(temp_file_path, "wb") as temp_file:
-            temp_file.write(content)
+            # Ideiglenes könyvtár létrehozása
+            temp_dir = f"/tmp/{filename}_temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file_path = os.path.join(temp_dir, filename)
+            with open(temp_file_path, "wb") as temp_file:
+                temp_file.write(content)
 
-        documents = []
-        if file_extension == ".pdf":
-            documents = self.load_pdf(temp_file_path)
-        elif file_extension == ".docx":
-            documents = self.load_docx(temp_file_path)
-        elif file_extension in [".txt", ".md"]:
-            with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
-                text = txt_file.read()
-                documents = [Document(text=text, metadata={"file_name": filename})]
+            documents = []
+            if file_extension == ".pdf":
+                documents = self.load_pdf(temp_file_path)
+            elif file_extension == ".docx":
+                documents = self.load_docx(temp_file_path)
+            elif file_extension in [".txt", ".md"]:
+                with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
+                    text = txt_file.read()
+                    documents = [Document(text=text, metadata={"file_name": filename})]
 
-        # Szöveg chunk-okra bontása
-        def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
-            words = text.split()
+            # Szöveg chunk-okra bontása
+            def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
+                words = text.split()
+                chunks = []
+                for i in range(0, len(words), chunk_size):
+                    chunk_content = ' '.join(words[i:i + chunk_size])
+                    metadata = {
+                        "chunk_index": i // chunk_size,
+                        "chunk_start": i,
+                        "chunk_end": i + chunk_size,
+                        "file_name": file_name
+                    }
+                    chunks.append(Document(text=chunk_content, metadata=metadata))
+                return chunks
+
+            # Topikok lekérése a TopicManager-ből
+            topics = self.topic_manager.topics  # Automatikusan lekérjük az aktuális topikokat
+
+            # Chunk-ok létrehozása és mentése
             chunks = []
-            for i in range(0, len(words), chunk_size):
-                chunk_content = ' '.join(words[i:i + chunk_size])
-                metadata = {
-                    "chunk_index": i // chunk_size,
-                    "chunk_start": i,
-                    "chunk_end": i + chunk_size,
-                    "file_name": file_name
-                }
-                chunks.append(Document(text=chunk_content, metadata=metadata))
-            return chunks
+            for doc in documents:
+                chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
 
-        # Topikok lekérése a TopicManager-ből
-        topics = self.topic_manager.topics  # Automatikusan lekérjük az aktuális topikokat
+            previous_chunk_id = None
 
-        # Chunk-ok létrehozása és mentése
-        chunks = []
-        for doc in documents:
-            chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
+            for idx, chunk in enumerate(chunks):
+                embedding = self.embedding.embed_query(chunk.text)
+                unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
+                chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
 
-        previous_chunk_id = None
+                # Chunk mentése Neo4j-ba
+                self.neo4j_manager.save_chunk(
+                    chunk.text,
+                    embedding,
+                    {"chunk_id": chunk_id, **chunk.metadata}
+                )
 
-        for idx, chunk in enumerate(chunks):
-            embedding = self.embedding.embed_query(chunk.text)
-            unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
-            chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
+                # Hipotetikus kérdések generálása
+                questions = self.generate_hypothetical_questions(chunk.text)
+                self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
 
-            # Chunk mentése Neo4j-ba
-            self.neo4j_manager.save_chunk(
-                chunk.text,
-                embedding,
-                {"chunk_id": chunk_id, **chunk.metadata}
-            )
+                # Kapcsolódás topikokhoz LLM segítségével
+                chunk_topics = self.identify_chunk_topics(chunk.text, topics)
+                for topic in chunk_topics:
+                    self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
 
-            # Hipotetikus kérdések generálása
-            questions = self.generate_hypothetical_questions(chunk.text)
-            self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
+                # NEXT kapcsolat építése a létező metódussal
+                if previous_chunk_id:
+                    self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
 
-            # Kapcsolódás topikokhoz LLM segítségével
-            chunk_topics = self.identify_chunk_topics(chunk.text, topics)
-            for topic in chunk_topics:
-                self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
+                previous_chunk_id = chunk_id
 
-            # NEXT kapcsolat építése a létező metódussal
-            if previous_chunk_id:
-                self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
+            # Dokumentum kapcsolatok építése
+            self.neo4j_manager.create_document_relationships()
 
-            previous_chunk_id = chunk_id
+            # Hasonlósági kapcsolatok inkrementális építése
+            self.neo4j_manager.create_similarity_relationships(top_k=20, threshold=0.8)
 
-        # Dokumentum kapcsolatok építése
-        self.neo4j_manager.create_document_relationships()
+            # Dokumentum összefoglalójának létrehozása
+            document_text = " ".join([chunk.text for chunk in chunks])
+            summary = self.summarize_document(document_text)
+            self.neo4j_manager.save_summary_to_neo4j(filename, summary)
 
-        # Hasonlósági kapcsolatok inkrementális építése
-        self.neo4j_manager.create_similarity_relationships(top_k=20, threshold=0.8)
+            logging.info(f"File '{filename}' feldolgozása befejeződött.")
+            logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
 
-        # Dokumentum összefoglalójának létrehozása
-        document_text = " ".join([chunk.text for chunk in chunks])
-        summary = self.summarize_document(document_text)
-        self.neo4j_manager.save_summary_to_neo4j(filename, summary)
-
-        logging.info(f"File '{filename}' feldolgozása befejeződött.")
-        logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
-
-    except Exception as e:
-        logging.error(f"Error uploading document: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+        except Exception as e:
+            logging.error(f"Error uploading document: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal Server Error")
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
     def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
         """
