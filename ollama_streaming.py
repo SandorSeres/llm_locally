@@ -17,8 +17,18 @@ from pydantic import BaseModel
 from uuid import uuid4
 from datetime import timedelta
 from neo4j.exceptions import ServiceUnavailable
-from model_manager import ModelManager
 
+#############Special own package import because of compiled code #####
+import importlib.util
+# Betöltjük a model_manager modult
+spec_model_manager = importlib.util.spec_from_file_location("model_manager", "/app/__pycache__/model_manager.cpython-38.pyc")
+model_manager = importlib.util.module_from_spec(spec_model_manager)
+spec_model_manager.loader.exec_module(model_manager)
+# Betöltjük a neo4jrag modult
+spec_neo4jrag = importlib.util.spec_from_file_location("neo4jrag", "/app/__pycache__/neo4jrag.cpython-38.pyc")
+neo4jrag = importlib.util.module_from_spec(spec_neo4jrag)
+spec_neo4jrag.loader.exec_module(neo4jrag)
+#####################################################################
 import httpx
 import time
 import logging
@@ -28,8 +38,6 @@ import json
 import asyncio
 from io import BytesIO
 
-# Saját modulok
-from neo4jrag import *
 
 dotenv.load_dotenv("./.env")
 logger = logging.getLogger(__name__)
@@ -56,7 +64,7 @@ async def lifespan(app: FastAPI):
     try:
         time.sleep(10)  # Biztosítja, hogy a Neo4j már elindult
         # Neo4jManager inicializálása
-        neo4j_manager = Neo4jManager(
+        neo4j_manager = neo4jrag.Neo4jManager(
             url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             username=os.getenv("NEO4J_USERNAME", "neo4j"),
             password=os.getenv("NEO4J_PASSWORD", "password"),
@@ -64,15 +72,15 @@ async def lifespan(app: FastAPI):
         logger.info("Neo4jManager initialized successfully", exc_info=True)
 
         # SessionManager inicializálása
-        session_manager = SessionManager(neo4j_manager)
+        session_manager = neo4jrag.SessionManager(neo4j_manager)
         logger.info("SessionManager initialized successfully", exc_info=True)
 
         # TopicManager inicializálása
-        topic_manager = TopicManager(neo4j_manager)
+        topic_manager = neo4jrag.TopicManager(neo4j_manager)
         logger.info("TopicManager initialized successfully", exc_info=True)
 
         # VectorStoreManager inicializálása
-        rag = VectorStoreManager(neo4j_manager, topic_manager)  # Átadjuk a TopicManager példányt
+        rag = neo4jrag.VectorStoreManager(neo4j_manager, topic_manager)  # Átadjuk a TopicManager példányt
         logger.info("VectorStoreManager initialized successfully")
 
     except Exception as e:
@@ -166,7 +174,7 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
     })
     messages.append({"role": "user", "content": query})
 
-    local_model_manager = ModelManager(
+    local_model_manager = model_manager.ModelManager(
         model_type=model_type or os.getenv("MODEL_TYPE", "ollama"),
         model_name=model_name or os.getenv("MODEL_NAME", "llama3.2")
     )

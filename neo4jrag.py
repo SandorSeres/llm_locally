@@ -15,7 +15,13 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import HumanMessage
 import httpx
 import asyncio
-from model_manager import ModelManager
+import importlib.util
+
+# Betöltjük a model_manager modult
+# Betöltjük a model_manager modult
+spec_model_manager = importlib.util.spec_from_file_location("model_manager", "/app/__pycache__/model_manager.cpython-38.pyc")
+model_manager = importlib.util.module_from_spec(spec_model_manager)
+spec_model_manager.loader.exec_module(model_manager)
 
 #
 # http://localhost:7474/browser/
@@ -739,7 +745,7 @@ class VectorStoreManager:
             logging.warning("Empty or invalid chunk text provided for question generation.")
             return []
 
-        llm = ModelManager(model_type="ollama", model_name="llama3.2")
+        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Based on the following text, generate up to {max_questions} relevant questions:\n\n"
             f"{chunk_text}\n\nQuestions:"
@@ -764,7 +770,7 @@ class VectorStoreManager:
         Returns:
             str: The final summarized text of the entire document.
         """
-        llm = ModelManager(model_type="ollama", model_name="llama3.2")
+        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         
         # Step 1: Split document into manageable chunks
         words = document_text.split()
@@ -1018,7 +1024,7 @@ class VectorStoreManager:
         Returns:
             List[str]: Topics that are relevant to the chunk.
         """
-        llm = ModelManager(model_type="ollama", model_name="llama3.2")
+        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Given the text:\n\n{chunk_text}\n\n"
             f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
