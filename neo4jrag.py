@@ -6,19 +6,16 @@ from typing import Optional, List
 from neo4j import GraphDatabase 
 from fastapi import UploadFile, HTTPException
 from llama_index.core import  Document
-from langchain_openai import OpenAIEmbeddings
 import shutil
 from typing import List, Dict, Any
 import uuid
 from typing import List, Optional
 from neo4j import GraphDatabase
 from langchain.prompts import PromptTemplate
-from langchain.llms import OpenAI
-from langchain_community.llms import OpenAI
-from langchain_community.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage
 import httpx
 import asyncio
+from model_manager import ModelManager
 
 #
 # http://localhost:7474/browser/
@@ -319,7 +316,7 @@ class Neo4jManager:
         """
         # Step 1: Identify topics using LLM
         try:
-            topics = self.identify_chunk_topics(query_text, self.neo4j_manager.get_all_topics())
+            topics = asyncio.run(self.identify_chunk_topics(query_text, self.neo4j_manager.get_all_topics()))
         except Exception as e:
             logging.error(f"Error identifying topics for query: {str(e)}")
             topics = []
@@ -737,50 +734,26 @@ class VectorStoreManager:
             return processed_results
         
 
-    def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
-        """
-        Generate hypothetical questions from a chunk of text using an LLM.
-
-        Args:
-            chunk_text (str): The text chunk to generate questions for.
-            max_questions (int): The maximum number of questions to return.
-
-        Returns:
-            List[str]: A list of generated questions (up to max_questions).
-        """
+    async def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
         if not chunk_text.strip():
             logging.warning("Empty or invalid chunk text provided for question generation.")
             return []
 
-        llm = ChatOpenAI(
-            model="gpt-4o",  # Chat modell
-            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
-            max_tokens=512  # Token limit
-        )
-
-        # Prompt szöveg közvetlen megadása
+        llm = ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Based on the following text, generate up to {max_questions} relevant questions:\n\n"
             f"{chunk_text}\n\nQuestions:"
         )
 
         try:
-            # LLM hívás az invoke metódussal
-            response = llm.invoke([HumanMessage(content=prompt)])
-
-            # Válasz feldolgozása
-            raw_output = response.content  # A válasz szövege
-            questions = [q.strip() for q in raw_output.split("\n") if q.strip()]
-
-            # Maximum `max_questions` visszaadása
-            return questions[:max_questions]
-
+            response = await llm.generate_complete([{"role": "user", "content": prompt}])
+            return response.splitlines()[:max_questions]  # Feltételezve, hogy a válasz soronként kérdéseket tartalmaz
         except Exception as e:
-            logging.error(f"Error generating hypothetical questions: {str(e)}")
-            return []  # Hiba esetén üres listát adunk vissza
+            logging.error(f"Error generating hypothetical questions: {e}", exc_info=True)
+            return []
 
 
-    def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
+    async def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
         """
         Summarize a document while handling token limits by breaking it into smaller chunks.
 
@@ -791,11 +764,7 @@ class VectorStoreManager:
         Returns:
             str: The final summarized text of the entire document.
         """
-        llm = ChatOpenAI(
-            model="gpt-4o",  # Chat modell
-            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
-            max_tokens=512  # Token limit
-        )
+        llm = ModelManager(model_type="ollama", model_name="llama3.2")
         
         # Step 1: Split document into manageable chunks
         words = document_text.split()
@@ -807,9 +776,9 @@ class VectorStoreManager:
         chunk_summaries = []
         for chunk in chunks:
             try:
-                response = llm([HumanMessage(content=f"Summarize the following text in 3 sentences:\n\n{chunk}")])
-                summary = response.content.strip()  # Az összefoglaló szöveg
-                chunk_summaries.append(summary)
+                response = await llm.generate_complete([{"role": "user", "content": f"Summarize the following text in 3 sentences:\n\n{chunk}"}])
+                #summary = response.splitlines()  # Az összefoglaló szöveg
+                chunk_summaries.append(response)
             except Exception as e:
                 logging.error(f"Error summarizing chunk: {str(e)}")
                 chunk_summaries.append("Error summarizing this chunk.")
@@ -817,8 +786,8 @@ class VectorStoreManager:
         # Step 3: Combine chunk summaries into a single summary
         combined_summaries = "\n".join(chunk_summaries)  # Külön változó a summarizált szövegekhez
         try:
-            response = llm([HumanMessage(content=f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}")])
-            final_summary = response.content.strip()
+            response = await llm.generate_complete([{"role": "user", "content":f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}"}])
+            final_summary = response.strip()
         except Exception as e:
             logging.error(f"Error creating final summary: {str(e)}")
             final_summary = "Error generating summary."
@@ -898,7 +867,7 @@ class VectorStoreManager:
                 )
 
                 # Hipotetikus kérdések generálása
-                questions = self.generate_hypothetical_questions(chunk.text)  
+                questions = await self.generate_hypothetical_questions(chunk.text)  
                 self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
 
                 # NEXT kapcsolat építése a létező metódussal
@@ -914,7 +883,7 @@ class VectorStoreManager:
 
             # Dokumentum összefoglalójának létrehozása
             document_text = " ".join([chunk.text for chunk in chunks])
-            summary = self.summarize_document(document_text)
+            summary = await self.summarize_document(document_text)
             self.neo4j_manager.save_summary_to_neo4j(filename, summary)
 
             logging.info(f"File '{filename}' feldolgozása befejeződött.")
@@ -1003,11 +972,11 @@ class VectorStoreManager:
                 )
 
                 # Hipotetikus kérdések generálása
-                questions = self.generate_hypothetical_questions(chunk.text)
+                questions = await self.generate_hypothetical_questions(chunk.text)
                 self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
 
                 # Kapcsolódás topikokhoz LLM segítségével
-                chunk_topics = self.identify_chunk_topics(chunk.text, topics)
+                chunk_topics = await self.identify_chunk_topics(chunk.text, topics)
                 for topic in chunk_topics:
                     self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
 
@@ -1025,7 +994,7 @@ class VectorStoreManager:
 
             # Dokumentum összefoglalójának létrehozása
             document_text = " ".join([chunk.text for chunk in chunks])
-            summary = self.summarize_document(document_text)
+            summary = await self.summarize_document(document_text)
             self.neo4j_manager.save_summary_to_neo4j(filename, summary)
 
             logging.info(f"File '{filename}' feldolgozása befejeződött.")
@@ -1038,7 +1007,7 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
+    async def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
         """
         Uses an LLM to identify which topics from the list are relevant to the chunk.
 
@@ -1049,11 +1018,7 @@ class VectorStoreManager:
         Returns:
             List[str]: Topics that are relevant to the chunk.
         """
-        llm = ChatOpenAI(
-            model="gpt-4o",  # Chat modell
-            temperature=0,  # Alacsony hőmérséklet a következetes válaszok érdekében
-            max_tokens=100  # Token limit
-        )
+        llm = ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Given the text:\n\n{chunk_text}\n\n"
             f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
@@ -1061,10 +1026,10 @@ class VectorStoreManager:
 
         try:
             # LLM hívás az invoke metódussal
-            response = llm.invoke([HumanMessage(content=prompt)])
+            response = await llm.generate_complete([{"role": "user", "content": prompt}])
 
             # Válasz feldolgozása
-            identified_topics = response.content.strip()  # Válasz szövegének elérése
+            identified_topics = response  # Válasz szövegének elérése
             relevant_topics = [topic.strip() for topic in identified_topics.split(",") if topic.strip() in topics]
 
             return relevant_topics

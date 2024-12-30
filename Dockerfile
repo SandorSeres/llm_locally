@@ -17,6 +17,8 @@ RUN python3 -m nltk.downloader punkt
 # Másolja az alkalmazás kódját a konténerbe
 COPY ./ollama_streaming.py /app/
 COPY ./neo4jrag.py /app/
+COPY ./neo4jrag.py /app/
+COPY ./model_manager.py /app/
 COPY ./static /app/static
 COPY ./templates /app/templates
 COPY ./.env /app/
