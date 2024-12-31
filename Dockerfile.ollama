@@ -10,6 +10,8 @@ RUN (ollama serve &); \
     ollama pull nomic-embed-text; \
     echo "llama3.2" ; \
     ollama pull llama3.2 ; \
+    echo "llama3.2-vision" ; \
+    ollama pull llama3.2-vision; \
     echo "Done" ; \
     pkill ollama
 
