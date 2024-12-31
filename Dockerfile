@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y software-properties-common curl \
 
 ENV PYTHONPATH=/app
 
+# Adjunk hozzá egy környezeti változót a lejárati dátumhoz
+ENV EXIT_AFTER_DATE=2025-10-26
+
 # Telepítse a függőségeket a requirements.txt fájlból
 COPY ./requirements.dock /app/
 WORKDIR /app
@@ -34,7 +37,6 @@ RUN ls -lai /app && ls -lai /app/__pycache__
 # Az alkalmazás portjának nyitása
 EXPOSE 8000
 
-# Indítsa el az alkalmazást
 # Hozzunk létre egy Python scriptet futtatásra
 COPY start.py /app/start.py
 
