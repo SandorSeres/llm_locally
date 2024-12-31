@@ -4,6 +4,7 @@ from typing import List, Dict, AsyncGenerator  # Típusannotációkhoz
 import httpx  # HTTP kérésekhez
 from fastapi import HTTPException  # Hibakezeléshez (FastAPI projektek esetén)
 import logging  # Naplózáshoz
+logger = logging.getLogger(__name__)
 
 class ModelManager:
     """

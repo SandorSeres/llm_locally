@@ -665,7 +665,7 @@ class VectorStoreManager:
             query_embedding = self.embedding.embed_query(query)
             
             # Keresés Neo4j-ban
-            results = self.neo4j_manager.advanced_search_with_topics(query_embedding)
+            results = self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
             
             # Csak a top-k eredményt adja vissza
             return results[:k]

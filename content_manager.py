@@ -61,7 +61,7 @@ class ContentManager:
                     "messages": [
                         {
                             "role": "user",
-                            "content": "What is in this image?",
+                            "content": "Mit látsz a képen? Ha szöveges akkor add vissza pontosan a teljes szöveget",
                             "images": [base64_image],
                         },
                     ],
