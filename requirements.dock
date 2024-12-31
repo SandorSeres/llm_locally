@@ -26,3 +26,6 @@ neo4j
 python-dotenv
 python-docx
 llama-index-vector-stores-neo4jvector
+
+#Microsoft
+markitdown

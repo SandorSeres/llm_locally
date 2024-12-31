@@ -13,21 +13,39 @@ from concurrent.futures import ThreadPoolExecutor
 
 from contextlib import asynccontextmanager
 from typing import Any, Dict, AsyncGenerator, Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from uuid import uuid4
 from datetime import timedelta
 from neo4j.exceptions import ServiceUnavailable
 
 #############Special own package import because of compiled code #####
+import sys 
 import importlib.util
+# Python verzió meghatározása
+python_version = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+print("Python verzió:", python_version)
+
+# Fájl elérési utak generálása
+model_manager_path = f"/app/__pycache__/model_manager.{python_version}.pyc"
+neo4jrag_path = f"/app/__pycache__/neo4jrag.{python_version}.pyc"
+
+# Ellenőrizzük a fájlok létezését
+if not os.path.exists(model_manager_path):
+    raise FileNotFoundError(f"{model_manager_path} nem található!")
+if not os.path.exists(neo4jrag_path):
+    raise FileNotFoundError(f"{neo4jrag_path} nem található!")
+
 # Betöltjük a model_manager modult
-spec_model_manager = importlib.util.spec_from_file_location("model_manager", "/app/__pycache__/model_manager.cpython-38.pyc")
+spec_model_manager = importlib.util.spec_from_file_location("model_manager", model_manager_path)
 model_manager = importlib.util.module_from_spec(spec_model_manager)
 spec_model_manager.loader.exec_module(model_manager)
+
 # Betöltjük a neo4jrag modult
-spec_neo4jrag = importlib.util.spec_from_file_location("neo4jrag", "/app/__pycache__/neo4jrag.cpython-38.pyc")
+spec_neo4jrag = importlib.util.spec_from_file_location("neo4jrag", neo4jrag_path)
 neo4jrag = importlib.util.module_from_spec(spec_neo4jrag)
 spec_neo4jrag.loader.exec_module(neo4jrag)
+
+print("Modulok sikeresen betöltve.")
 #####################################################################
 import httpx
 import time
@@ -123,6 +141,8 @@ class QueryModel(BaseModel):
     model_type: Optional[str] = None
     model_name: Optional[str] = None
 
+    model_config = ConfigDict(protected_namespaces=())
+    
 class ResponseModel(BaseModel):
     answer: str
     metadata: str
@@ -308,18 +328,18 @@ async def upload_files(files: List[UploadFile], background_tasks: BackgroundTask
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    supported_formats = ['.pdf', '.docx', '.txt', '.md']
-    for file in files:
-        logger.info(file.filename)
-        if not any(file.filename.endswith(ext) for ext in supported_formats):
-            raise HTTPException(status_code=400, detail=f"Unsupported file format: {file.filename}")
-
     temp_file_paths = []
+
     for file in files:
-        temp_path = f"temp_{file.filename}"
+        # Fájl név és kiterjesztés kezelése
+        filename, extension = os.path.splitext(file.filename)
+        temp_path = f"temp_{filename}{extension}"  # Temp fájl név a megfelelő kiterjesztéssel
+
         async with aiofiles.open(temp_path, 'wb') as out_file:
             content = await file.read()
             await out_file.write(content)
+
+        logger.info(f"Temp file created: {temp_path}")
         temp_file_paths.append((temp_path, file.filename))
 
     # Háttérfolyamat indítása aszinkron módon

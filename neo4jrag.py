@@ -15,13 +15,19 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import HumanMessage
 import httpx
 import asyncio
+import sys
 import importlib.util
+# Python verzió meghatározása
+python_version = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
 
 # Betöltjük a model_manager modult
-# Betöltjük a model_manager modult
-spec_model_manager = importlib.util.spec_from_file_location("model_manager", "/app/__pycache__/model_manager.cpython-38.pyc")
+spec_model_manager = importlib.util.spec_from_file_location("model_manager", f"/app/__pycache__/model_manager.{python_version}.pyc")
 model_manager = importlib.util.module_from_spec(spec_model_manager)
 spec_model_manager.loader.exec_module(model_manager)
+
+spec_content_manager = importlib.util.spec_from_file_location("content_manager", f"/app/__pycache__/content_manager.{python_version}.pyc")
+content_manager = importlib.util.module_from_spec(spec_content_manager)
+spec_content_manager.loader.exec_module(content_manager)
 
 #
 # http://localhost:7474/browser/
@@ -629,7 +635,7 @@ class VectorStoreManager:
         self.topic_manager = topic_manager  # A lifespan-ből kapja a példányt
         api_url= os.getenv("OLLAMA_EMBEDDING_API_URL","")
         self.embedding = EmbeddingGenerator(api_url=api_url)  # EmbeddingGenerator használata
-
+        self.contentManager = content_manager.ContentManager()
         # Vektorindex létrehozása
         self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=self.embedding.embedding_size)
 
@@ -918,11 +924,6 @@ class VectorStoreManager:
             else:
                 raise ValueError("Invalid input type. Expected UploadFile or bytes.")
 
-            file_extension = os.path.splitext(filename)[-1].lower()
-            supported_formats = ['.pdf', '.docx', '.txt', '.md']
-            if file_extension not in supported_formats:
-                raise ValueError(f"Unsupported file format: {file_extension}")
-
             # Ideiglenes könyvtár létrehozása
             temp_dir = f"/tmp/{filename}_temp"
             os.makedirs(temp_dir, exist_ok=True)
@@ -930,15 +931,14 @@ class VectorStoreManager:
             with open(temp_file_path, "wb") as temp_file:
                 temp_file.write(content)
 
-            documents = []
-            if file_extension == ".pdf":
-                documents = self.load_pdf(temp_file_path)
-            elif file_extension == ".docx":
-                documents = self.load_docx(temp_file_path)
-            elif file_extension in [".txt", ".md"]:
-                with open(temp_file_path, 'r', encoding='utf-8') as txt_file:
-                    text = txt_file.read()
-                    documents = [Document(text=text, metadata={"file_name": filename})]
+            # Szöveg kinyerése MarkItDown segítségével
+            
+            text = self.contentManager.extract_text(temp_file_path)
+            #logging.info(text)
+            if not text:
+                documents = []
+            else:
+                documents = [Document(text=text, metadata={"file_name": filename})]
 
             # Szöveg chunk-okra bontása
             def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
@@ -1052,27 +1052,4 @@ class VectorStoreManager:
         self.create_similarity_relationships(top_k=50, threshold=0.8)
         logging.info("Teljes hasonlósági gráf újragenerálva.")
     
-    # Function to load data from .pdf files
-    def load_pdf(self, filepath: str)-> List[Document]:
-        import PyPDF2
-        pdf_text = ""
-        with open(filepath, "rb") as file:
-            reader = PyPDF2.PdfReader(file)
-            for page_num in range(len(reader.pages)):
-                page = reader.pages[page_num]
-                pdf_text += page.extract_text()
-        return [Document(text=pdf_text, metadata={"file_name": os.path.basename(filepath)})]
-
-    def load_docx(self, filepath: str) -> List[Document]:
-        try:
-            from docx import Document as DocxDocument  # Import python-docx
-            doc = DocxDocument(filepath)
-            full_text = []
-            for para in doc.paragraphs:
-                full_text.append(para.text)
-            combined_text = "\n".join(full_text)
-            return [Document(text=combined_text, metadata={"file_name": os.path.basename(filepath)})]
-        except Exception as e:
-            logging.error(f"Error loading docx file {filepath}: {str(e)}",exc_info=True)
-            return []
 
