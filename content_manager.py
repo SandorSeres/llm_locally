@@ -66,7 +66,7 @@ class ContentManager:
                         },
                     ],
                 },
-                timeout=60
+                timeout=600
             )
 
             # Naplózd a teljes választ

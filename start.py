@@ -2,6 +2,7 @@ import sys
 import os
 from datetime import datetime
 
+
 # Környezeti változó beolvasása
 exit_after_date_str = os.getenv("EXIT_AFTER_DATE")
 if not exit_after_date_str:

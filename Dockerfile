@@ -31,15 +31,17 @@ COPY ./content_manager.py /app/
 COPY ./static /app/static
 COPY ./templates /app/templates
 COPY ./.env /app/
+COPY ./deploy/run.sh /app/
+RUN chmod +x /app/run.sh
+
+RUN pip install pyarmor
 # Futtasd a kód fordítását és az eredeti fájlok eltávolítását
-RUN bash /app/compile_all.sh 
-RUN ls -lai /app && ls -lai /app/__pycache__
+RUN bash /app/compile_all.sh && rm /app/compile_all.sh
+
+COPY ./start.py /app/start.py
+
 # Az alkalmazás portjának nyitása
 EXPOSE 8000
 
-# Hozzunk létre egy Python scriptet futtatásra
-COPY start.py /app/start.py
-
 # Az alkalmazás indítása
-CMD ["python3", "/app/start.py"]
-
+CMD ["bash" , "/app/run.sh"]

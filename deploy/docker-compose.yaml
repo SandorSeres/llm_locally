@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j_vector
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+      - "7473:7473"  # HTTPS
+    environment:
+      - NEO4J_AUTH=neo4j/pleaseletmein
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/import
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  ollama:
+    image: sseres/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_FLASH_ATTENTION=1  
+      - OLLAMA_KV_CACHE_TYPE=q8_0  
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  app:
+    image: sseres/chatbot_app:latest
+    container_name: chatbot_app
+    ports:
+      - "8000:8000"  # FastAPI app HTTP
+    depends_on:
+      - neo4j
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  app_data:
+
