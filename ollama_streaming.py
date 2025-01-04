@@ -171,7 +171,7 @@ def get_session(session_id: str) -> dict:
 
 async def generate_response_stream(query: str, session_id: str, session_data: dict, model_type: str, model_name: str):
     try:
-        rag_context = rag.search(query, k=3)
+        rag_context = await rag.search(query, k=3)
     except Exception as e:
         rag_context = "No relevant context found in RAG database."
         logger.warning(f"RAG search failed: {e}", exc_info=True)

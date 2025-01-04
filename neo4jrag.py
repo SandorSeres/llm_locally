@@ -102,6 +102,48 @@ class Neo4jManager:
             count = result.single()["total_chunks"]
             return count
 
+    def get_all_topics(self) -> List[str]:
+        """
+        Lekérdezi az összes Topic node-ot, és visszaadja a nevüket egy listaként.
+        """
+        query = """
+        MATCH (t:Topic)
+        RETURN t.name AS topic_name
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            return [record["topic_name"] for record in result]
+
+    async def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
+        """
+        Uses an LLM to identify which topics from the list are relevant to the chunk.
+
+        Args:
+            chunk_text (str): The text of the chunk.
+            topics (List[str]): List of topics to check.
+
+        Returns:
+            List[str]: Topics that are relevant to the chunk.
+        """
+        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
+        prompt = (
+            f"Given the text:\n\n{chunk_text}\n\n"
+            f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
+        )
+
+        try:
+            # LLM hívás az invoke metódussal
+            response = await llm.generate_complete([{"role": "user", "content": prompt}])
+
+            # Válasz feldolgozása
+            identified_topics = response  # Válasz szövegének elérése
+            relevant_topics = [topic.strip() for topic in identified_topics.split(",") if topic.strip() in topics]
+
+            return relevant_topics
+
+        except Exception as e:
+            logging.error(f"Error identifying topics for chunk: {str(e)}")
+            return []  # Hiba esetén üres listát adunk vissza
 
     def save_chunk(self, text: str, embedding: List[float], metadata: dict):
         """Save a chunk to the database with expanded metadata."""
@@ -312,7 +354,7 @@ class Neo4jManager:
 
         return ranked_results[:k]
 
-    def advanced_search_with_topics(self, query_embedding: List[float], query_text: str, k: int = 10) -> List[Dict[str, Any]]:
+    async def advanced_search_with_topics(self, query_embedding: List[float], query_text: str, k: int = 10) -> List[Dict[str, Any]]:
         """
         Combines embedding-based search with various graph relationships, question nodes,
         and topic nodes for enhanced accuracy. Identifies relevant topics for the query using LLM.
@@ -328,7 +370,7 @@ class Neo4jManager:
         """
         # Step 1: Identify topics using LLM
         try:
-            topics = asyncio.run(self.identify_chunk_topics(query_text, self.neo4j_manager.get_all_topics()))
+            topics = await self.identify_chunk_topics(query_text, self.get_all_topics())
         except Exception as e:
             logging.error(f"Error identifying topics for query: {str(e)}")
             topics = []
@@ -647,7 +689,7 @@ class VectorStoreManager:
         self.topic_manager.create_topics_in_neo4j()
         return new_topics
 
-    def search(self, query: str, k: int = 3) -> List[dict]:
+    async def search(self, query: str, k: int = 3) -> List[dict]:
         """
         Keresés egy lekérdezés alapján.
         
@@ -665,7 +707,7 @@ class VectorStoreManager:
             query_embedding = self.embedding.embed_query(query)
             
             # Keresés Neo4j-ban
-            results = self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
+            results = await self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
             
             # Csak a top-k eredményt adja vissza
             return results[:k]
@@ -982,7 +1024,7 @@ class VectorStoreManager:
                 self.neo4j_manager.save_questions_to_neo4j(chunk_id, questions)
 
                 # Kapcsolódás topikokhoz LLM segítségével
-                chunk_topics = await self.identify_chunk_topics(chunk.text, topics)
+                chunk_topics = await self.neo4j_manager.identify_chunk_topics(chunk.text, topics)
                 for topic in chunk_topics:
                     self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
 
@@ -1013,36 +1055,6 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    async def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
-        """
-        Uses an LLM to identify which topics from the list are relevant to the chunk.
-
-        Args:
-            chunk_text (str): The text of the chunk.
-            topics (List[str]): List of topics to check.
-
-        Returns:
-            List[str]: Topics that are relevant to the chunk.
-        """
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
-        prompt = (
-            f"Given the text:\n\n{chunk_text}\n\n"
-            f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
-        )
-
-        try:
-            # LLM hívás az invoke metódussal
-            response = await llm.generate_complete([{"role": "user", "content": prompt}])
-
-            # Válasz feldolgozása
-            identified_topics = response  # Válasz szövegének elérése
-            relevant_topics = [topic.strip() for topic in identified_topics.split(",") if topic.strip() in topics]
-
-            return relevant_topics
-
-        except Exception as e:
-            logging.error(f"Error identifying topics for chunk: {str(e)}")
-            return []  # Hiba esetén üres listát adunk vissza
            
     def periodic_full_rebuild(self):
         """

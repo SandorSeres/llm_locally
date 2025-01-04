@@ -6,30 +6,12 @@
    - Frontend oldal, amely lehetővé teszi a felhasználóknak, hogy kérdéseket tegyenek fel a rendszernek.
    - Modellválasztó felületet kínál, ahol az OpenAI vagy Ollama típusú modellek közül választható ki az aktuálisan használandó modell.
    - Valós idejű adatfolyamot biztosít a kérdés-válasz interakciók során.
+   (http://localhost:8000)
 
 2. **./static/upload.html**:
    - Feltöltési felület, amely támogatja dokumentumok és témák feltöltését.
    - A felhasználók választhatnak, hogy dokumentumokat vagy topikokat töltenek fel, és ennek megfelelően a rendszer a megfelelő API végpontra továbbítja a feltöltést.
-
-3. **ollama_streaming.py**:
-   - **FastAPI alapú backend**:
-     - **Válaszok generálása**: Streaming módú válaszadás OpenAI GPT vagy Ollama modellek segítségével.
-     - **Fájlok feltöltése**: Dokumentumok vagy topikok feldolgozása és adatbázisba mentése.
-   - **Rendszerfunkciók**:
-     - Dokumentumok darabolása (chunking) és Neo4j adatbázisba mentése.
-     - Hasonlósági kapcsolatok és "következő" (NEXT) kapcsolatok generálása.
-     - Összefoglalók létrehozása és mentése.
-
-4. **neo4jrag.py**:
-   - **Neo4j integráció**:
-     - Dokumentumok, chunk-ok, és topikok tárolása.
-     - Kapcsolatok építése a chunk-ok, dokumentumok és topikok között.
-   - **Keresési funkciók**:
-     - Embedding alapú keresés, kapcsolatok, és témák használatával kombinált fejlett keresés.
-   - **Feldolgozási eszközök**:
-     - PDF és DOCX fájlok beolvasása.
-     - Hipotetikus kérdések generálása szövegrészletekből (chunk-ok).
-     - Dokumentumok összefoglalása és összefüggő szöveggé alakítása.
+   (http://localhost:8000/upload)
 
 ---
 
@@ -44,26 +26,26 @@
      - Dokumentumok esetén a rendszer automatikusan darabolja a szövegeket, és feltölti azokat a Neo4j adatbázisba.
 
 #### 2. **Backend feldolgozás**
-   - **ollama_streaming.py**:
      - A kérdésekhez egy `generate` API végpontot biztosít, amely a megadott modell alapján választ generál.
+         - Embedding alapú keresést valósít meg.
+         - Fejlett keresést biztosít a Neo4j-ben lévő kapcsolatok alapján.
      - A `upload` és `upload_topics` API végpontok fogadják a fájlokat, és aszinkron módon dolgozzák fel azokat.
-   - **neo4jrag.py**:
-     - A dokumentumok darabokra bontását és feltöltését végzi.
-     - Hozzáadja a topikokat, és a chunk-okat topikokhoz kapcsolja.
-     - Generálja a Neo4j adatbázisban a hasonlósági kapcsolatokat.
+         - A dokumentumok darabokra bontását és feltöltését végzi.
+         - Hozzáadja a topikokat, és a chunk-okat topikokhoz kapcsolja.
+         - Generálja a Neo4j adatbázisban a hasonlósági kapcsolatokat.
+         - Chunk-ok, dokumentumok és kapcsolatok tárolása a Neo4j-ben.
+         - Támogatja a `SIMILAR_TO`, `NEXT`, és `RELATED_TO` kapcsolatok létrehozását.
+         - Témák beolvasása és tárolása fájlokból.
+     
+   **További Funkciók**
+   - **Összefoglalók generálása**:
+     - Dokumentumok feltöltésekor automatikusan összefoglalót készít a rendszer.
+   - **Hipotetikus kérdések generálása**:
+     - A chunk-okhoz releváns kérdéseket generál, amelyeket ment a Neo4j-be.
+   - **Kapcsolatok építése**:
+     - Chunk-ok kapcsolódása a dokumentumokhoz és topikokhoz automatikusan megtörténik.
 
-#### 3. **Adatbázis funkcionalitás**
-   - **SessionManager**
-     - Sessionok tárolása
-   - **Neo4jManager**:
-     - Chunk-ok, dokumentumok és kapcsolatok tárolása a Neo4j-ben.
-     - Támogatja a `SIMILAR_TO`, `NEXT`, és `RELATED_TO` kapcsolatok létrehozását.
-   - **TopicManager**:
-     - Témák beolvasása és tárolása fájlokból.
-     - Témák létrehozása a Neo4j adatbázisban.
-   - **VectorStoreManager**:
-     - Embedding alapú keresést valósít meg.
-     - Fejlett keresést biztosít a Neo4j-ben lévő kapcsolatok alapján.
+Ezzel a felhasználók könnyen kereshetnek, tölthetnek fel adatokat, és interakcióba léphetnek a rendszerrel a kérdések megválaszolása érdekében.
 
 ---
 
@@ -84,32 +66,11 @@
 3. Kattintson a "Fájlok kiválasztása" gombra, és töltse fel a fájlokat.
 4. Nyomja meg a "Feltöltés" gombot.
 
-#### **Adatbázis Keresés**
-   - A kereséseket automatikusan végzi a rendszer a kérdések feldolgozásakor.
-   - Embedding alapú keresés, témák és kapcsolatok alapján nyújtja a legrelevánsabb eredményeket.
-
----
-
-### További Funkciók
-- **Összefoglalók generálása**:
-   - Dokumentumok feltöltésekor automatikusan összefoglalót készít a rendszer.
-- **Hipotetikus kérdések generálása**:
-   - A chunk-okhoz releváns kérdéseket generál, amelyeket ment a Neo4j-be.
-- **Kapcsolatok építése**:
-   - Chunk-ok kapcsolódása a dokumentumokhoz és topikokhoz automatikusan megtörténik.
-
-Ezzel a felhasználók könnyen kereshetnek, tölthetnek fel adatokat, és interakcióba léphetnek a rendszerrel a kérdések megválaszolása érdekében.
-
-
-### Neo4j Funkciók és Felhasználási Leírás
-
-A Neo4j adatbázis a rendszer központi elemeként szolgál, ahol a dokumentumokat, azok chunk-jait (szövegrészletek), a hozzájuk tartozó témákat (topikok), valamint ezek közötti kapcsolatokat tároljuk és kezeljük. Az alábbiakban részletesen bemutatjuk az adatfeltöltési, kapcsolatépítési és keresési funkciókat, felhasználói szemszögből.
-
 ---
 
 ### **1. Dokumentumok Feltöltése**
 
-A rendszerbe feltöltött fájlok (pl. PDF, DOCX, TXT) automatikusan feldolgozásra kerülnek:
+A rendszerbe feltöltött fájlok (pl. PDF, DOCX, TXT, PPTX, JPG/PNG, stb.) automatikusan feldolgozásra kerülnek:
 
 1. **Feldarabolás (Chunk-okra bontás)**:
    A dokumentumot kisebb részekre (chunk-ok) osztjuk, hogy könnyebben lehessen keresni és tárolni. Minden chunk tartalmazza:
@@ -168,7 +129,7 @@ A keresési folyamat az adatbázisban tárolt chunk-ok és kapcsolatok kombinác
 
 - **Dokumentum feltöltése**:
    - A feltöltött fájl automatikusan feldolgozásra kerül, a chunk-okhoz kapcsolódó témák és kapcsolatok létrejönnek.
-   - A rendszer a háttérben építi ki a hasonlósági és szomszédos kapcsolatokat.
+   - A rendszer a háttérben építi ki a hasonlósági és szomszédos kapcsolatokat, de célszerű megvárni míg a dokumentumok betöltése megtörténik.
 
 - **Keresés indítása**:
    - A felhasználó beír egy kérdést a keresőbe.
@@ -185,6 +146,5 @@ A keresési folyamat az adatbázisban tárolt chunk-ok és kapcsolatok kombinác
 - **Releváns keresési eredmények**: A hasonlósági és kapcsolati gráfok kombinációja pontosabb találatokat eredményez.
 - **Téma-alapú keresés**: A témák figyelembevételével a rendszer gyorsabban és pontosabban találja meg a releváns tartalmakat.
 - **Automatizált kapcsolatépítés**: A dokumentum- és chunk-kapcsolatok automatikus kiépítése csökkenti a manuális munkát.
-- **Támogatott formátumok**: A rendszer széles körben támogatott fájlformátumokat dolgoz fel (PDF, DOCX, TXT, MD). 
+- **Támogatott formátumok**: A rendszer széles körben támogatott fájlformátumokat dolgoz fel (PDF, DOCX, TXT, MD, JPG/PNG).
 
-Ezáltal a Neo4j-alapú rendszer ideális megoldást nyújt komplex adatok kezelésére és hatékony keresésére.

@@ -36,7 +36,7 @@ RUN chmod +x /app/run.sh
 
 RUN pip install pyarmor
 # Futtasd a kód fordítását és az eredeti fájlok eltávolítását
-RUN bash /app/compile_all.sh && rm /app/compile_all.sh
+RUN bash -x /app/compile_all.sh && rm /app/compile_all.sh
 
 COPY ./start.py /app/start.py
 

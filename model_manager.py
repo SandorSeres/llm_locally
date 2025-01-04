@@ -59,7 +59,7 @@ class ModelManager:
                     if not line:
                         continue
 
-                    logger.info(f"Streamed line: {line}", exc_info=True)  # Ellenőrzés
+                    #logger.info(f"Streamed line: {line}", exc_info=True)  # Ellenőrzés
 
                     try:
                         data = json.loads(line)
