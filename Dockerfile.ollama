@@ -1,6 +1,14 @@
 FROM ollama/ollama:latest
 
-RUN apt update && apt install  bash procps coreutils
+RUN apt update && apt install -y bash procps coreutils
+
+# Környezeti változók beállítása a timeout növeléséhez
+# Modell betöltési timeout növelése
+ENV OLLAMA_LOAD_TIMEOUT=30m  
+# Keep-alive kapcsolat időtartama
+ENV OLLAMA_KEEP_ALIVE=10m    
+# Max várakozó kérések száma
+ENV OLLAMA_MAX_QUEUE=1024    
 
 # Indítunk egy háttérben futó ollama szervert, várunk kicsit amíg elindul,
 # majd lehúzzuk a modelleket, végül leállítjuk a szervert.
@@ -8,11 +16,11 @@ RUN (ollama serve &); \
     sleep 5; \
     echo "embedding"; \
     ollama pull nomic-embed-text; \
-    echo "llama3.2" ; \
-    ollama pull llama3.2 ; \
-    echo "llama3.2-vision" ; \
+    echo "llama3.2"; \
+    ollama pull llama3.2; \
+    echo "llama3.2-vision"; \
     ollama pull llama3.2-vision; \
-    echo "Done" ; \
+    echo "Done"; \
     pkill ollama
 
 # Ha minden modell sikeresen letöltődött, akkor a CMD-ben már csak a szervert indítjuk.

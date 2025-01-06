@@ -41,7 +41,7 @@ class ModelManager:
         A választ OpenAI-kompatibilis formátumra alakítjuk.
         """
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             try:
                 logger.info(f"model: {self.model_name}, prompt: {prompt}, 'stream': {True}", exc_info=True)
                 response = await client.post(
@@ -49,10 +49,10 @@ class ModelManager:
                     json={
                         "model": self.model_name,
                         "prompt": prompt,
-                        "options": {"num_ctx": 8096},
+                        "options": {"num_ctx": 60000},
                         "stream": True
                     },
-                    timeout=None
+                    timeout=600
                 )
                 async for line in response.aiter_lines():
                     line = line.strip()
@@ -102,7 +102,7 @@ class ModelManager:
         }
         logger.info(messages, exc_info=True)
         logger.info(f"Body: {body} Header: {headers} URL: {self.openai_api_url}", exc_info=True)
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream("POST", self.openai_api_url, headers=headers, json=body) as response:
                 #if response.status_code != 200:
                 #    raise HTTPException(status_code=response.status_code, detail="Error from OpenAI API")
@@ -123,15 +123,15 @@ class ModelManager:
 
     async def _generate_ollama_complete(self, messages: List[Dict[str, str]]) -> str:
         prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             response = await client.post(
                 self.ollama_api_url,
                 json={
                     "model": self.model_name,
                     "prompt": prompt,
-                    "options": {"num_ctx": 8096}
+                    "options": {"num_ctx": 60000}
                 },
-                timeout=None
+                timeout=600
             )
             
             result = ""
@@ -161,7 +161,7 @@ class ModelManager:
             "frequency_penalty": 0,
             "presence_penalty": 0,
         }
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             response = await client.post(self.openai_api_url, headers=headers, json=body, timeout=None)
             response_data = response.json()
             if response.status_code != 200 or "choices" not in response_data:

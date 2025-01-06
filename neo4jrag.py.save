@@ -51,8 +51,6 @@ class Neo4jManager:
             auth=(self.username, self.password),
             max_connection_pool_size=max_pool_size
         )
-        api_url= os.getenv("OLLAMA_EMBEDDING_API_URL","")
-        self.embedding = EmbeddingGenerator(api_url=api_url)  # EmbeddingGenerator használata
         logging.info("Neo4jManager initialized successfully")
 
     def close(self):
@@ -75,6 +73,38 @@ class Neo4jManager:
             result = session.run(query, {"topics": topics})
             count = result.single()["topics_created"]
             logging.info(f"{count} topics created successfully.")
+
+    def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
+        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
+        prompt = (
+            f"Given the text:\n\n{chunk_text}\n\n"
+            f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
+        )
+        try:
+            response = llm.generate_complete([{"role": "user", "content": prompt}])
+            relevant_topics = [
+                topic.strip()
+                for topic in response.split(",")
+                if topic.strip() in topics
+            ]
+            return relevant_topics
+
+        except Exception as e:
+            logging.error(f"Error identifying topics for chunk: {str(e)}")
+            return []
+           
+    def get_all_topics(self) -> List[str]:
+        """
+        Lekérdezi az összes Topic node-ot, és visszaadja a nevüket egy listaként.
+        """
+        query = """
+        MATCH (t:Topic)
+        RETURN t.name AS topic_name
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            return [record["topic_name"] for record in result]
+
 
     def link_chunk_to_topic(self, chunk_id: str, topic: str):
         """
@@ -104,48 +134,6 @@ class Neo4jManager:
             count = result.single()["total_chunks"]
             return count
 
-    def get_all_topics(self) -> List[str]:
-        """
-        Lekérdezi az összes Topic node-ot, és visszaadja a nevüket egy listaként.
-        """
-        query = """
-        MATCH (t:Topic)
-        RETURN t.name AS topic_name
-        """
-        with self.driver.session() as session:
-            result = session.run(query)
-            return [record["topic_name"] for record in result]
-
-    async def identify_chunk_topics(self, chunk_text: str, topics: List[str]) -> List[str]:
-        """
-        Uses an LLM to identify which topics from the list are relevant to the chunk.
-
-        Args:
-            chunk_text (str): The text of the chunk.
-            topics (List[str]): List of topics to check.
-
-        Returns:
-            List[str]: Topics that are relevant to the chunk.
-        """
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
-        prompt = (
-            f"Given the text:\n\n{chunk_text}\n\n"
-            f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
-        )
-
-        try:
-            # LLM hívás az invoke metódussal
-            response = await llm.generate_complete([{"role": "user", "content": prompt}])
-
-            # Válasz feldolgozása
-            identified_topics = response  # Válasz szövegének elérése
-            relevant_topics = [topic.strip() for topic in identified_topics.split(",") if topic.strip() in topics]
-
-            return relevant_topics
-
-        except Exception as e:
-            logging.error(f"Error identifying topics for chunk: {str(e)}")
-            return []  # Hiba esetén üres listát adunk vissza
 
     def save_chunk(self, text: str, embedding: List[float], metadata: dict):
         """Save a chunk to the database with expanded metadata."""
@@ -241,6 +229,25 @@ class Neo4jManager:
             )
         logging.info(f"Vector index '{index_name}' created successfully")
 
+    def create_question_vector_index(self, index_name: str = "question_embedding_index", dimensions: int = 1536, similarity_function: str = 'cosine'):
+        with self.driver.session() as session:
+            # Drop existing index if it exists
+            session.run(f"DROP INDEX {index_name} IF EXISTS")
+            # Create the vector index
+            session.run(
+                f"""
+                CREATE VECTOR INDEX {index_name}
+                FOR (q:Question)
+                ON (q.embedding)
+                OPTIONS {{
+                    indexConfig: {{
+                        `vector.dimensions`: {dimensions},
+                        `vector.similarity_function`: '{similarity_function}'
+                    }}
+                }}
+                """
+            )
+        logging.info(f"Vector index '{index_name}' for Question nodes created successfully")
     
 
     def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
@@ -272,140 +279,39 @@ class Neo4jManager:
             return processed_results
 
     
-    def advanced_search(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
+
+    def advanced_search_with_topics(self, query_embedding: List[float], query_text: str, k: int = 10) -> List[Dict[str, Any]]:
         """
-        Combines embedding-based search with various graph relationships and includes question nodes for enhanced accuracy.
+        Combines:
+          1) chunk-based embedding search (a régi, jól működő kód),
+          2) question-based embedding search (kérdések embeddingje),
+          3) graph relationships,
+          4) summary,
+          5) topic-based search.
 
-        Args:
-            query_embedding (List[float]): Query embedding vector.
-            k (int): Number of top results to return.
-
-        Returns:
-            List[Dict[str, Any]]: Combined and ranked results from embedding and graph searches.
+        A chunk_index a keresésnél kulcsfontosságú (graph, summary, question, topic).
+        A question-based találatnál chunk_id-ket kapunk, ezeket *át kell alakítani* chunk_indexre,
+        hogy ugyanúgy beemelhessük a Step 3..6 (graph, summary, question, topic) keresésbe.
         """
-        # Step 1: Perform embedding-based search
-        embedding_results = self.search_chunks(query_embedding, k)
-        chunk_ids = [result['metadata']['chunk_index'] for result in embedding_results]
 
-        # Step 2: Graph relationship-based search
-        graph_query = """
-        MATCH (chunk:Chunk)-[:SIMILAR_TO|BELONGS_TO|NEXT]->(related_chunk:Chunk)
-        WHERE chunk.chunk_index IN $chunk_ids
-        RETURN DISTINCT related_chunk.text AS text, 
-               related_chunk.file_name AS file_name,
-               related_chunk.chunk_index AS chunk_index,
-               related_chunk.chunk_start AS chunk_start,
-               related_chunk.chunk_end AS chunk_end,
-               'graph' AS source
-        """
-        graph_results = self.execute_query(graph_query, {"chunk_ids": chunk_ids})
-
-        # Step 3: Document summaries
-        summary_query = """
-        MATCH (chunk:Chunk)-[:BELONGS_TO]->(doc:Document)-[:HAS_SUMMARY]->(summary:Summary)
-        WHERE chunk.chunk_index IN $chunk_ids
-        RETURN DISTINCT summary.text AS text,
-               doc.name AS document_name,
-               'summary' AS source
-        """
-        summary_results = self.execute_query(summary_query, {"chunk_ids": chunk_ids})
-
-        # Step 4: Generated questions
-        question_query = """
-        MATCH (chunk:Chunk)-[:GENERATES]->(q:Question)
-        WHERE chunk.chunk_index IN $chunk_ids
-        RETURN DISTINCT q.text AS text,
-               chunk.file_name AS file_name,
-               'question' AS source
-        """
-        question_results = self.execute_query(question_query, {"chunk_ids": chunk_ids})
-
-        # Step 5: Combine and rank results
-        combined_results = []
-
-        # Add embedding results
-        for result in embedding_results:
-            combined_results.append({
-                "text": result["text"],
-                "metadata": {
-                    "file_name": result["metadata"].get("file_name", "unknown"),
-                    "chunk_index": result["metadata"].get("chunk_index"),
-                    "chunk_start": result["metadata"].get("chunk_start"),
-                    "chunk_end": result["metadata"].get("chunk_end"),
-                },
-                "score": result["score"],
-                "source": "embedding"
-            })
-
-        # Add graph results
-        for record in graph_results:
-            combined_results.append({
-                "text": record["text"],
-                "metadata": {
-                    "file_name": record.get("file_name", "unknown"),
-                    "chunk_index": record.get("chunk_index"),
-                    "chunk_start": record.get("chunk_start"),
-                    "chunk_end": record.get("chunk_end"),
-                },
-                "score": None,
-                "source": record.get("source", "graph")
-            })
-
-        # Add summaries
-        for record in summary_results:
-            combined_results.append({
-                "text": record["text"],
-                "metadata": {
-                    "document_name": record["document_name"]
-                },
-                "score": None,
-                "source": record.get("source", "summary")
-            })
-
-        # Add questions
-        for record in question_results:
-            combined_results.append({
-                "text": record["text"],
-                "metadata": {
-                    "file_name": record.get("file_name", "unknown"),
-                },
-                "score": None,
-                "source": record.get("source", "question")
-            })
-
-        # Step 6: (Optional) Rank results by relevance or additional criteria
-        ranked_results = sorted(
-            combined_results,
-            key=lambda x: x["score"] if x["score"] is not None else 0,
-            reverse=True
-        )
-
-        return ranked_results[:k]
-
-    async def advanced_search_with_topics(self, query_embedding: List[float], query_text: str, k: int = 10) -> List[Dict[str, Any]]:
-        """
-        Combines embedding-based search with various graph relationships, question nodes,
-        and topic nodes for enhanced accuracy. Identifies relevant topics for the query using LLM.
-
-        Args:
-            query_embedding (List[float]): Query embedding vector.
-            query_text (str): The raw query text.
-            k (int): Number of top results to return.
-
-        Returns:
-            List[Dict[str, Any]]: Combined and ranked results from embedding, graph,
-                                  topic, and question-based searches.
-        """
-        # Step 1: Identify topics using LLM
+        # ---(1) Identify topics using LLM---
         try:
-            topics = await self.identify_chunk_topics(query_text, self.get_all_topics())
+            all_topics = self.get_all_topics()  # Ezt feltételezzük létező metódusnak
+            topics = self.identify_chunk_topics(query_text, all_topics)
         except Exception as e:
             logging.error(f"Error identifying topics for query: {str(e)}")
             topics = []
 
-        # Step 2A: Perform embedding-based search
-        embedding_results = self.search_chunks(query_embedding, k)
-        chunk_ids = [result['metadata']['chunk_index'] for result in embedding_results]
+        # ---(2A) Chunk-based embedding search (a régi, bevált folyamat)---
+        embedding_results = self.search_chunks(query_embedding, k)  
+        # Ez a search_chunks tipikusan az, amely a chunk_indexet is kitölti "metadata"-ban.
+        # Példa: [
+        #   {
+        #     "text": "...",
+        #     "metadata": {"file_name":"...", "chunk_index": 0, ...},
+        #     "score": 0.85
+        #   }, ...
+        # ]
 
         # A chunk_indexek kinyerése
         chunk_indexes_from_embedding = [res["metadata"]["chunk_index"] for res in embedding_results if res["metadata"].get("chunk_index") is not None]
@@ -617,7 +523,15 @@ class Neo4jManager:
 
         return ranked_results[:k]
 
-    async def multi_round_kag(
+    def _concat_chunk_text(self, chunks: List[Dict[str, Any]]) -> str:
+        """
+        Egyszerű segédfüggvény, 
+        ami összefűzi a chunkok 'text' mezőjét új sorokkal elválasztva.
+        """
+        # Ha a chunk-nak nincs 'text' mezője, akkor c.get("text", "")
+        return "\n".join(c["text"] for c in chunks if "text" in c)
+
+    def multi_round_kag(
         self,
         query_embedding: List[float],
         query_text: str,
@@ -638,7 +552,7 @@ class Neo4jManager:
 
         llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         # 1) Első kör: releváns chunkok a user query alapján
-        logging.info("[---------------------------multi_round_kag] Round 1: retrieving initial chunks.")
+        logging.info("[multi_round_kag] Round 1: retrieving initial chunks.")
         initial_chunks = await self.advanced_search_with_topics(
             query_embedding,
             query_text,
@@ -647,32 +561,26 @@ class Neo4jManager:
 
         # Fűzzük össze az első kör chunkjait egy nagy sztringbe
         initial_context_str = self._concat_chunk_text(initial_chunks)
-        logging.info(f"[---------------------------multi_round_kag] initial context len: {len(initial_context_str)}")
 
         # 2) A LLM-től clarifying question kérése
         #    (Itt pl. promptban írjuk le a user queryt és a chunkok textjét.)
-        clarifying_prompt = f"""
-        Te egy segítőkész AI vagy. A felhasználó a következő kérdést tette fel:
-        '{query_text}'
-
-        Az alábbi részleges kontextus áll rendelkezésre:
-        {initial_context_str}
-
-        Kérlek, javasolj egy tisztázó kérdést, amely segíti a pontosabb válaszadást. Ha nincs szükség további pontosításra, 
-        térj vissza egy üres sztringgel.
-        """
+        clarifying_prompt = (
+            f"User asked: '{query_text}'\n\n"
+            f"Here is some partial context:\n{initial_context_str}\n\n"
+            "Please propose a clarifying question to help find a more accurate answer. "
+            "If no additional clarification is needed, just return an empty string."
+        )
         try:
-            clarifying_question = await llm.generate_complete([
+            clarifying_question = llm.generate_complete([
                 {"role": "user", "content": clarifying_prompt}
             ])
-            logging.info(f"[---------------------------multi_round_kag] clarifying_question : {clarifying_question}")
         except Exception as e:
             logging.error(f"LLM error (clarifying question): {str(e)}")
             clarifying_question = ""
 
         # 3) Ha a clarifying_question nem üres, keresünk rá
         if clarifying_question.strip():
-            logging.info("[----------------------------multi_round_kag] Round 2: clarifying question -> retrieving new chunks.")
+            logging.info("[multi_round_kag] Round 2: clarifying question -> retrieving new chunks.")
             clar_question_emb = self.embedding.embed_query(clarifying_question)
             second_round_chunks = await self.advanced_search_with_topics(
                 clar_question_emb,
@@ -687,49 +595,24 @@ class Neo4jManager:
         combined_context_str = self._concat_chunk_text(combined_chunks)
 
         # 4) Kérjük a végső választ a LLM-től
-        final_prompt = f"""
-        Te egy segítőkész, magyar nyelvű AI asszisztens vagy. Feladatod, hogy a felhasználó kérdésére 
-        adott válaszodat kizárólag a megadott kontextus (chunkok) információinak felhasználásával add meg. 
-        Ha a kontextusban nincs releváns információ, nyíltan közöld ezt.
-
-        Felhasználó eredeti kérdése:
-        {query_text}
-
-        Tisztázó kérdés (ha volt):
-        {clarifying_question}
-
-        Kivonat a tudásbázisból (chunkok):
-        {combined_context_str}
-
-        Utasítások a válaszadáshoz:
-        1. Kizárólag a fenti kontextusra alapozva válaszolj.
-        2. Ha a kontextus kevés információt tartalmaz, jelezd ezt.
-        3. Ne találj ki új információt – csak azt írd, ami a chunkokból kiderül.
-        4. A válasz végén sorold fel a használt forrásokat (chunkok file_name-je vagy bármilyen azonosítója), 
-           pl. "Forrás: file1, file2..." stb., ha releváns.
-        5. A stílus legyen tömör, egyértelmű és lényegre törő.
-
-        Kérlek, add meg a lehető legjobb választ a fenti instrukciók alapján.
-        """
+        final_prompt = (
+            f"User's original query: {query_text}\n"
+            f"Clarifying question (if any): {clarifying_question}\n\n"
+            "Below is all the relevant information from the knowledge base:\n"
+            f"{combined_context_str}\n\n"
+            "Based on all of the above, please provide the best possible final answer."
+        )
         try:
-            logging.info("[----------------------------multi_round_kag] Final Round ")
-            final_answer = await llm.generate_complete([
+            final_answer = llm.generate_complete([
                 {"role": "user", "content": final_prompt}
             ])
         except Exception as e:
             logging.error(f"LLM error (final answer): {str(e)}")
             final_answer = "Sorry, I encountered an error generating the final answer."
 
-        logging.info("[----------------------------multi_round_kag] DONE")
         return final_answer
 
-    def _concat_chunk_text(self, chunks: List[Dict[str, Any]]) -> str:
-        """
-        Egyszerű segédfüggvény, 
-        ami összefűzi a chunkok 'text' mezőjét új sorokkal elválasztva.
-        """
-        # Ha a chunk-nak nincs 'text' mezője, akkor c.get("text", "")
-        return "\n".join(c["text"] for c in chunks if "text" in c)
+
 
     def create_document_relationships(self):
         """
@@ -907,6 +790,7 @@ class VectorStoreManager:
         self.contentManager = content_manager.ContentManager()
         # Vektorindex létrehozása
         self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=self.embedding.embedding_size)
+        self.neo4j_manager.create_question_vector_index("question_embedding_index", dimensions=self.embedding.embedding_size)
 
     def upload_new_topics(self, filepath: str):
         """
@@ -916,7 +800,7 @@ class VectorStoreManager:
         self.topic_manager.create_topics_in_neo4j()
         return new_topics
 
-    async def search(self, query: str, k: int = 3) -> List[dict]:
+    def search(self, query: str, k: int = 3) -> List[dict]:
         """
         Keresés egy lekérdezés alapján.
         
@@ -934,9 +818,8 @@ class VectorStoreManager:
             query_embedding = self.embedding.embed_query(query)
             
             # Keresés Neo4j-ban
-            #results = await self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
-            results = await self.neo4j_manager.multi_round_kag(query_embedding,query)
-            
+            #results = self.neo4j_manager.multi_round_kag(query_embedding,query)
+            results = self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
             # Csak a top-k eredményt adja vissza
             return results[:k]
         except Exception as e:
@@ -1016,7 +899,7 @@ class VectorStoreManager:
             return processed_results
         
 
-    async def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
+    def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
         if not chunk_text.strip():
             logging.warning("Empty or invalid chunk text provided for question generation.")
             return []
@@ -1028,14 +911,14 @@ class VectorStoreManager:
         )
 
         try:
-            response = await llm.generate_complete([{"role": "user", "content": prompt}])
+            response = llm.generate_complete([{"role": "user", "content": prompt}])
             return response.splitlines()[:max_questions]  # Feltételezve, hogy a válasz soronként kérdéseket tartalmaz
         except Exception as e:
             logging.error(f"Error generating hypothetical questions: {e}", exc_info=True)
             return []
 
 
-    async def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
+    def summarize_document(self, document_text: str, chunk_size: int = 2000) -> str:
         """
         Summarize a document while handling token limits by breaking it into smaller chunks.
 
@@ -1058,7 +941,7 @@ class VectorStoreManager:
         chunk_summaries = []
         for chunk in chunks:
             try:
-                response = await llm.generate_complete([{"role": "user", "content": f"Summarize the following text in 3 sentences:\n\n{chunk}"}])
+                response = llm.generate_complete([{"role": "user", "content": f"Summarize the following text in 3 sentences:\n\n{chunk}"}])
                 #summary = response.splitlines()  # Az összefoglaló szöveg
                 chunk_summaries.append(response)
             except Exception as e:
@@ -1068,7 +951,7 @@ class VectorStoreManager:
         # Step 3: Combine chunk summaries into a single summary
         combined_summaries = "\n".join(chunk_summaries)  # Külön változó a summarizált szövegekhez
         try:
-            response = await llm.generate_complete([{"role": "user", "content":f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}"}])
+            response = llm.generate_complete([{"role": "user", "content":f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}"}])
             final_summary = response.strip()
         except Exception as e:
             logging.error(f"Error creating final summary: {str(e)}")
@@ -1297,7 +1180,6 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-           
     def periodic_full_rebuild(self):
         """
         Teljes similarity újragenerálása időszakosan.

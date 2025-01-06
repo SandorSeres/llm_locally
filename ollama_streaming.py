@@ -64,8 +64,8 @@ logging.basicConfig(level=logging.INFO)
 # Globális változók
 
 model_options = {
-    "openai": ["gpt-4o", "gpt-4o-mini"],
-    "ollama": ["gemma2","mistral-nemo", "llama3.2"]
+    "ollama": ["llama3.2","gemma2","mistral-nemo"],
+    "openai": ["gpt-4o", "gpt-4o-mini"]
 }
 
 rag = None
