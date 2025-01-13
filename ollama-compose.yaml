@@ -1,8 +1,6 @@
 services:
   ollama:
-    build:
-      context: .
-      dockerfile: Dockerfile.ollama
+    image: sseres/ollama:latest
     ports:
       - "11434:11434"
     environment:

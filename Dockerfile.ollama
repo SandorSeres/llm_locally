@@ -2,16 +2,12 @@ FROM ollama/ollama:latest
 
 RUN apt update && apt install -y bash procps coreutils
 
-# Környezeti változók beállítása a timeout növeléséhez
-# Modell betöltési timeout növelése
-ENV OLLAMA_LOAD_TIMEOUT=30m  
-# Keep-alive kapcsolat időtartama
-ENV OLLAMA_KEEP_ALIVE=10m    
-# Max várakozó kérések száma
-ENV OLLAMA_MAX_QUEUE=1024    
-
 # Indítunk egy háttérben futó ollama szervert, várunk kicsit amíg elindul,
 # majd lehúzzuk a modelleket, végül leállítjuk a szervert.
+# Embedding
+#    mxbai-embed-large (334M parameters; 670MB)
+#    nomic-embed-text (137M parameters; 274MB)
+#    all-minilm (23M parameters; 46MB)
 RUN (ollama serve &); \
     sleep 5; \
     echo "embedding"; \
@@ -22,6 +18,14 @@ RUN (ollama serve &); \
     ollama pull llama3.2-vision; \
     echo "Done"; \
     pkill ollama
+
+# Környezeti változók beállítása a timeout növeléséhez
+# Modell betöltési timeout növelése
+ENV OLLAMA_LOAD_TIMEOUT=30m  
+# Keep-alive kapcsolat időtartama
+ENV OLLAMA_KEEP_ALIVE=10m    
+# Max várakozó kérések száma
+ENV OLLAMA_MAX_QUEUE=1024    
 
 # Ha minden modell sikeresen letöltődött, akkor a CMD-ben már csak a szervert indítjuk.
 CMD ["serve"]

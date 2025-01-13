@@ -889,7 +889,7 @@ class EmbeddingGenerator:
             "prompt": text
         }
         
-        with httpx.Client() as client:  # Szinkron kliens használata
+        with httpx.Client(timeout=httpx.Timeout(100.0, read=200.0)) as client:  # Szinkron kliens használata, növelt timeouttal, mivel modellek között vált!
             response = client.post(url, json=payload)
             
         if response.status_code == 200:
@@ -1016,6 +1016,7 @@ class VectorStoreManager:
             return processed_results
         
 
+
     async def generate_hypothetical_questions(self, chunk_text: str, max_questions: int = 3) -> List[str]:
         if not chunk_text.strip():
             logging.warning("Empty or invalid chunk text provided for question generation.")
@@ -1029,7 +1030,17 @@ class VectorStoreManager:
 
         try:
             response = await llm.generate_complete([{"role": "user", "content": prompt}])
-            return response.splitlines()[:max_questions]  # Feltételezve, hogy a válasz soronként kérdéseket tartalmaz
+
+            # Feldolgozás: a sorokat tisztítsd meg, szűrd ki az üreseket
+            questions = [
+                line.strip()
+                for line in response.splitlines()
+                if line.strip() and line.strip().endswith("?")  # Csak a kérdések megőrzése
+            ]
+
+            # Csak a maximális kérdésszámot add vissza
+            return questions[:max_questions]
+
         except Exception as e:
             logging.error(f"Error generating hypothetical questions: {e}", exc_info=True)
             return []
@@ -1200,9 +1211,10 @@ class VectorStoreManager:
             temp_file_path = os.path.join(temp_dir, filename)
             with open(temp_file_path, "wb") as temp_file:
                 temp_file.write(content)
-
+            logging.info("Ideiglenes könyvtár létrehozva")
             # Szöveg kinyerése MarkItDown segítségével
             text = self.contentManager.extract_text(temp_file_path)
+            logging.info("Szöveg kinyerve MarkItDown segítségével")
             if not text:
                 documents = []
             else:
@@ -1225,6 +1237,7 @@ class VectorStoreManager:
 
             # Topikok lekérése a TopicManager-ből
             topics = self.topic_manager.topics
+            logging.info("Topikok lekérve")
 
             chunks = []
             for doc in documents:
@@ -1233,6 +1246,7 @@ class VectorStoreManager:
             previous_chunk_id = None
 
             for idx, chunk in enumerate(chunks):
+                logging.info("Chank enumerate")
                 # Chunk embedding
                 embedding = self.embedding.embed_query(chunk.text)
                 unique_id = str(uuid.uuid4())  # Egyedi azonosító
@@ -1244,15 +1258,19 @@ class VectorStoreManager:
                     embedding,
                     {"chunk_id": chunk_id, **chunk.metadata}
                 )
+                logging.info("Chank mentve")
 
                 # Hipotetikus kérdések generálása
                 questions = await self.generate_hypothetical_questions(chunk.text)
+                logging.info(f"Hypotetic question:{questions}")
 
                 # Új: Minden kérdéshez is generáljunk embeddinget és tároljuk a :Question node-ban
                 question_embeddings = []
                 for question_text in questions:
                     q_embedding = self.embedding.embed_query(question_text)  # generáljunk embeddinget
+                    logging.info(f"question embedding {question_text}")
                     question_embeddings.append((question_text, q_embedding))
+                logging.info("question embedding done")
 
                 # Mentsük el a kérdéseket + embeddinget Neo4j-ba
                 # Lehet egy új metódus, pl. save_questions_with_embedding_to_neo4j
@@ -1260,6 +1278,7 @@ class VectorStoreManager:
                     chunk_id,
                     question_embeddings
                 )
+                logging.info("questions saved")
 
                 # Kapcsolódás topikokhoz LLM segítségével
                 chunk_topics = await self.neo4j_manager.identify_chunk_topics(chunk.text, topics)
@@ -1281,6 +1300,7 @@ class VectorStoreManager:
                 top_k=20,
                 threshold=0.8
             )
+            logging.info("kapcsolatok done")
 
             # Dokumentum összefoglaló
             document_text = " ".join([chunk.text for chunk in chunks])
