@@ -81,8 +81,12 @@ async def lifespan(app: FastAPI):
     logger.info("App startup", exc_info=True)
     try:
         time.sleep(10)  # Biztosítja, hogy a Neo4j már elindult
+        # ModelManager
+        modelmanager = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
+        logger.info("ModelManager initialized successfully", exc_info=True)
         # Neo4jManager inicializálása
         neo4j_manager = neo4jrag.Neo4jManager(
+            model_manager=modelmanager,
             url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             username=os.getenv("NEO4J_USERNAME", "neo4j"),
             password=os.getenv("NEO4J_PASSWORD", "password"),
@@ -98,7 +102,7 @@ async def lifespan(app: FastAPI):
         logger.info("TopicManager initialized successfully", exc_info=True)
 
         # VectorStoreManager inicializálása
-        rag = neo4jrag.VectorStoreManager(neo4j_manager, topic_manager)  # Átadjuk a TopicManager példányt
+        rag = neo4jrag.VectorStoreManager(modelmanager, neo4j_manager, topic_manager)  # Átadjuk a TopicManager példányt
         logger.info("VectorStoreManager initialized successfully")
 
     except Exception as e:

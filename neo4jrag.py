@@ -42,7 +42,7 @@ logging.basicConfig(format='%(asctime)s,%(msecs)03d %(levelname)-8s [%(filename)
 
 
 class Neo4jManager:
-    def __init__(self, url: str = None, username: str = None, password: str = None, max_pool_size: int = 10):
+    def __init__(self, model_manager,url: str = None, username: str = None, password: str = None, max_pool_size: int = 10):
         self.url = url or os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.username = username or os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = password or os.getenv("NEO4J_PASSWORD")
@@ -51,8 +51,7 @@ class Neo4jManager:
             auth=(self.username, self.password),
             max_connection_pool_size=max_pool_size
         )
-        api_url= os.getenv("OLLAMA_EMBEDDING_API_URL","")
-        self.embedding = EmbeddingGenerator(api_url=api_url)  # EmbeddingGenerator használata
+        self.model_manager = model_manager
         logging.info("Neo4jManager initialized successfully")
 
     def close(self):
@@ -127,7 +126,6 @@ class Neo4jManager:
         Returns:
             List[str]: Topics that are relevant to the chunk.
         """
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Given the text:\n\n{chunk_text}\n\n"
             f"Identify the topics from this list that are relevant:\n{', '.join(topics)}"
@@ -135,7 +133,7 @@ class Neo4jManager:
 
         try:
             # LLM hívás az invoke metódussal
-            response = await llm.generate_complete([{"role": "user", "content": prompt}])
+            response = await self.model_manager.generate_complete([{"role": "user", "content": prompt}])
 
             # Válasz feldolgozása
             identified_topics = response  # Válasz szövegének elérése
@@ -220,27 +218,44 @@ class Neo4jManager:
         with self.driver.session() as session:
             session.run(query, {"document_name": document_name, "summary_text": summary_text})
 
-    def create_vector_index(self, index_name: str, dimensions: int = 1536, similarity_function: str = 'cosine'):
-        """Create a vector index in the database."""
-        with self.driver.session() as session:
-            # Drop existing index if it exists
-            session.run(f"DROP INDEX {index_name} IF EXISTS")
-            # Create the vector index
-            session.run(
-                f"""
-                CREATE VECTOR INDEX {index_name}
-                FOR (n:Chunk)
-                ON (n.embedding)
-                OPTIONS {{
-                    indexConfig: {{
-                        `vector.dimensions`: {dimensions},
-                        `vector.similarity_function`: '{similarity_function}'
-                    }}
-                }}
-                """
-            )
-        logging.info(f"Vector index '{index_name}' created successfully")
+    def create_vector_index(self, index_name: str, label: str, property_name: str = "embedding", dimensions: int = 1536, similarity_function: str = 'cosine'):
+        """
+        Create a vector index in the database for a specific label and property, ensuring it does not already exist.
 
+        Args:
+            index_name (str): Name of the index.
+            label (str): Node label (e.g., Chunk, Question) for which the index is created.
+            property_name (str): Property to index (default: "embedding").
+            dimensions (int): Number of dimensions for the vector index.
+            similarity_function (str): Similarity function to use (default: 'cosine').
+        """
+        with self.driver.session() as session:
+            # Check if the index already exists
+            existing_indexes = session.run("SHOW INDEXES").data()
+            existing_index_names = [index["name"] for index in existing_indexes]
+
+            if index_name in existing_index_names:
+                logging.info(f"Vector index '{index_name}' already exists. Skipping creation.")
+                return
+
+            # Create the index for the specified label and property
+            try:
+                session.run(
+                    f"""
+                    CREATE VECTOR INDEX {index_name}
+                    FOR (n:{label})
+                    ON (n.{property_name})
+                    OPTIONS {{
+                        indexConfig: {{
+                            `vector.dimensions`: {dimensions},
+                            `vector.similarity_function`: '{similarity_function}'
+                        }}
+                    }}
+                    """
+                )
+                logging.info(f"Vector index '{index_name}' created successfully for label '{label}' on property '{property_name}'.")
+            except Exception as e:
+                logging.error(f"Error creating vector index '{index_name}': {str(e)}", exc_info=True)
     
 
     def search_chunks(self, query_embedding: List[float], k: int = 10) -> List[Dict[str, Any]]:
@@ -617,111 +632,6 @@ class Neo4jManager:
 
         return ranked_results[:k]
 
-    async def multi_round_kag(
-        self,
-        query_embedding: List[float],
-        query_text: str,
-        k: int = 10
-    ) -> str:
-        """
-        Egy egyszerű, kétkörös KAG folyamat:
-
-        1) Lekérdezzük a releváns chunkokat (advanced_search_with_topics).
-        2) A LLM-től kérünk clarifying question-t a kapott chunk-információ alapján.
-        3) Ha van clarifying question, újra keresünk (második kör).
-        4) A LLM-mel összerakjuk a végső választ, 
-           a két kör chunkjainak összefűzött tartalma alapján.
-
-        Visszatér: 
-            str - a LLM által generált végső válasz
-        """
-
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
-        # 1) Első kör: releváns chunkok a user query alapján
-        logging.info("[---------------------------multi_round_kag] Round 1: retrieving initial chunks.")
-        initial_chunks = await self.advanced_search_with_topics(
-            query_embedding,
-            query_text,
-            k=k
-        )
-
-        # Fűzzük össze az első kör chunkjait egy nagy sztringbe
-        initial_context_str = self._concat_chunk_text(initial_chunks)
-        logging.info(f"[---------------------------multi_round_kag] initial context len: {len(initial_context_str)}")
-
-        # 2) A LLM-től clarifying question kérése
-        #    (Itt pl. promptban írjuk le a user queryt és a chunkok textjét.)
-        clarifying_prompt = f"""
-        Te egy segítőkész AI vagy. A felhasználó a következő kérdést tette fel:
-        '{query_text}'
-
-        Az alábbi részleges kontextus áll rendelkezésre:
-        {initial_context_str}
-
-        Kérlek, javasolj egy tisztázó kérdést, amely segíti a pontosabb válaszadást. Ha nincs szükség további pontosításra, 
-        térj vissza egy üres sztringgel.
-        """
-        try:
-            clarifying_question = await llm.generate_complete([
-                {"role": "user", "content": clarifying_prompt}
-            ])
-            logging.info(f"[---------------------------multi_round_kag] clarifying_question : {clarifying_question}")
-        except Exception as e:
-            logging.error(f"LLM error (clarifying question): {str(e)}")
-            clarifying_question = ""
-
-        # 3) Ha a clarifying_question nem üres, keresünk rá
-        if clarifying_question.strip():
-            logging.info("[----------------------------multi_round_kag] Round 2: clarifying question -> retrieving new chunks.")
-            clar_question_emb = self.embedding.embed_query(clarifying_question)
-            second_round_chunks = await self.advanced_search_with_topics(
-                clar_question_emb,
-                clarifying_question,
-                k=k
-            )
-        else:
-            second_round_chunks = []
-
-        # Egyesítjük az összes releváns chunkot:
-        combined_chunks = initial_chunks + second_round_chunks
-        combined_context_str = self._concat_chunk_text(combined_chunks)
-
-        # 4) Kérjük a végső választ a LLM-től
-        final_prompt = f"""
-        Te egy segítőkész, magyar nyelvű AI asszisztens vagy. Feladatod, hogy a felhasználó kérdésére 
-        adott válaszodat kizárólag a megadott kontextus (chunkok) információinak felhasználásával add meg. 
-        Ha a kontextusban nincs releváns információ, nyíltan közöld ezt.
-
-        Felhasználó eredeti kérdése:
-        {query_text}
-
-        Tisztázó kérdés (ha volt):
-        {clarifying_question}
-
-        Kivonat a tudásbázisból (chunkok):
-        {combined_context_str}
-
-        Utasítások a válaszadáshoz:
-        1. Kizárólag a fenti kontextusra alapozva válaszolj.
-        2. Ha a kontextus kevés információt tartalmaz, jelezd ezt.
-        3. Ne találj ki új információt – csak azt írd, ami a chunkokból kiderül.
-        4. A válasz végén sorold fel a használt forrásokat (chunkok file_name-je vagy bármilyen azonosítója), 
-           pl. "Forrás: file1, file2..." stb., ha releváns.
-        5. A stílus legyen tömör, egyértelmű és lényegre törő.
-
-        Kérlek, add meg a lehető legjobb választ a fenti instrukciók alapján.
-        """
-        try:
-            logging.info("[----------------------------multi_round_kag] Final Round ")
-            final_answer = await llm.generate_complete([
-                {"role": "user", "content": final_prompt}
-            ])
-        except Exception as e:
-            logging.error(f"LLM error (final answer): {str(e)}")
-            final_answer = "Sorry, I encountered an error generating the final answer."
-
-        logging.info("[----------------------------multi_round_kag] DONE")
-        return final_answer
 
     def _concat_chunk_text(self, chunks: List[Dict[str, Any]]) -> str:
         """
@@ -873,40 +783,26 @@ class TopicManager:
         self.neo4j_manager.create_topics(self.topics)
         logging.info("Topics successfully created in Neo4j.")
 
-class EmbeddingGenerator:
-    """
-    Egy általános osztály az Ollama API használatához embedding generálására.
-    """
-    def __init__(self, api_url: str = None, embedding_size: int = 768):
-        self.api_url = api_url
-        self.embedding_size = embedding_size
-
-    def embed_query(self, text):
-        url = "http://ollama:11434/api/embeddings"  # Állítsd be a megfelelő címet
-        
-        payload = {
-            "model": "nomic-embed-text",  # Vagy a használni kívánt embedding modell neve ,768
-            "prompt": text
-        }
-        
-        with httpx.Client(timeout=httpx.Timeout(100.0, read=200.0)) as client:  # Szinkron kliens használata, növelt timeouttal, mivel modellek között vált!
-            response = client.post(url, json=payload)
-            
-        if response.status_code == 200:
-            result = response.json()
-            return result["embedding"]
-        else:
-            raise Exception(f"Hiba történt: {response.status_code}, {response.text}")
-
 class VectorStoreManager:
-    def __init__(self, neo4j_manager: Neo4jManager, topic_manager: TopicManager):
+    def __init__(self, model_manager, neo4j_manager: Neo4jManager, topic_manager: TopicManager):
+        self.model_manager = model_manager
         self.neo4j_manager = neo4j_manager
         self.topic_manager = topic_manager  # A lifespan-ből kapja a példányt
-        api_url= os.getenv("OLLAMA_EMBEDDING_API_URL","")
-        self.embedding = EmbeddingGenerator(api_url=api_url)  # EmbeddingGenerator használata
         self.contentManager = content_manager.ContentManager()
         # Vektorindex létrehozása
-        self.neo4j_manager.create_vector_index("chunk_embedding_index", dimensions=self.embedding.embedding_size)
+        self.neo4j_manager.create_vector_index(
+            "chunk_embedding_index",
+            label="Chunk",
+            property_name="embedding",
+            dimensions=self.model_manager.embedding_size
+        )
+
+        self.neo4j_manager.create_vector_index(
+            "question_embedding_index",
+            label="Question",
+            property_name="embedding",
+            dimensions=self.model_manager.embedding_size
+        )
 
     def upload_new_topics(self, filepath: str):
         """
@@ -931,11 +827,11 @@ class VectorStoreManager:
             logging.info(f"Starting search method for query: {query}")
             
             # Leképezed a kérdést embedding-re
-            query_embedding = self.embedding.embed_query(query)
+            query_embedding = await self.model_manager.embed_query(query)
             
             # Keresés Neo4j-ban
             #results = await self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
-            results = await self.neo4j_manager.multi_round_kag(query_embedding,query)
+            results = await self.neo4j_manager.advanced_search_with_topics(query_embedding,query)
             
             # Csak a top-k eredményt adja vissza
             return results[:k]
@@ -1022,14 +918,13 @@ class VectorStoreManager:
             logging.warning("Empty or invalid chunk text provided for question generation.")
             return []
 
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         prompt = (
             f"Based on the following text, generate up to {max_questions} relevant questions:\n\n"
             f"{chunk_text}\n\nQuestions:"
         )
 
         try:
-            response = await llm.generate_complete([{"role": "user", "content": prompt}])
+            response = await self.model_manager.generate_complete([{"role": "user", "content": prompt}])
 
             # Feldolgozás: a sorokat tisztítsd meg, szűrd ki az üreseket
             questions = [
@@ -1057,8 +952,6 @@ class VectorStoreManager:
         Returns:
             str: The final summarized text of the entire document.
         """
-        llm = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
-        
         # Step 1: Split document into manageable chunks
         words = document_text.split()
         chunks = [
@@ -1069,7 +962,7 @@ class VectorStoreManager:
         chunk_summaries = []
         for chunk in chunks:
             try:
-                response = await llm.generate_complete([{"role": "user", "content": f"Summarize the following text in 3 sentences:\n\n{chunk}"}])
+                response = await self.model_manager.generate_complete([{"role": "user", "content": f"Summarize the following text in 3 sentences:\n\n{chunk}"}])
                 #summary = response.splitlines()  # Az összefoglaló szöveg
                 chunk_summaries.append(response)
             except Exception as e:
@@ -1079,7 +972,7 @@ class VectorStoreManager:
         # Step 3: Combine chunk summaries into a single summary
         combined_summaries = "\n".join(chunk_summaries)  # Külön változó a summarizált szövegekhez
         try:
-            response = await llm.generate_complete([{"role": "user", "content":f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}"}])
+            response = await self.model_manager.generate_complete([{"role": "user", "content":f"Combine the following summaries into a cohesive summary of the entire document:\n\n{combined_summaries}"}])
             final_summary = response.strip()
         except Exception as e:
             logging.error(f"Error creating final summary: {str(e)}")
@@ -1148,7 +1041,7 @@ class VectorStoreManager:
             previous_chunk_id = None
 
             for idx, chunk in enumerate(chunks):
-                embedding = await self.embedding.embed_query(chunk.text)
+                embedding = await self.model_manager.embed_query(chunk.text)
                 unique_id = str(uuid.uuid4())  # Egyedi azonosító generálása
                 chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"  # Globálisan egyedi azonosító
 
@@ -1194,122 +1087,26 @@ class VectorStoreManager:
         """ Több ezres dokumentum számhoz és százezres chunkhoz """
         temp_dir = None
         try:
-            # Input fájl vagy tartalom feldolgozása
-            if isinstance(file_or_content, UploadFile):
-                content = await file_or_content.read()
-                filename = file_or_content.filename
-            elif isinstance(file_or_content, bytes):
-                content = file_or_content
-                if filename is None:
-                    raise ValueError("Filename must be provided when uploading bytes content")
-            else:
-                raise ValueError("Invalid input type. Expected UploadFile or bytes.")
+            # 1. Fájl betöltése és ideiglenes könyvtár létrehozása
+            content, filename = await self._load_file_content(file_or_content, filename)
+            temp_file_path = self._create_temp_file(content, filename)
 
-            # Ideiglenes könyvtár létrehozása
-            temp_dir = f"/tmp/{filename}_temp"
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_file_path = os.path.join(temp_dir, filename)
-            with open(temp_file_path, "wb") as temp_file:
-                temp_file.write(content)
-            logging.info("Ideiglenes könyvtár létrehozva")
-            # Szöveg kinyerése MarkItDown segítségével
+            # 2. Szöveg kinyerése és feldarabolása
             text = self.contentManager.extract_text(temp_file_path)
-            logging.info("Szöveg kinyerve MarkItDown segítségével")
-            if not text:
-                documents = []
-            else:
-                documents = [Document(text=text, metadata={"file_name": filename})]
+            documents = self._prepare_documents(text, filename)
+            chunks = self._create_chunks(documents)
 
-            # Szöveg chunk-okra bontása
-            def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
-                words = text.split()
-                chunks = []
-                for i in range(0, len(words), chunk_size):
-                    chunk_content = ' '.join(words[i:i + chunk_size])
-                    metadata = {
-                        "chunk_index": i // chunk_size,
-                        "chunk_start": i,
-                        "chunk_end": i + chunk_size,
-                        "file_name": file_name
-                    }
-                    chunks.append(Document(text=chunk_content, metadata=metadata))
-                return chunks
-
-            # Topikok lekérése a TopicManager-ből
+            # 3. Topikok lekérése
             topics = self.topic_manager.topics
             logging.info("Topikok lekérve")
 
-            chunks = []
-            for doc in documents:
-                chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
+            # 4. Chunkok feldolgozása
+            await self._process_chunks(chunks, topics)
 
-            previous_chunk_id = None
-
-            for idx, chunk in enumerate(chunks):
-                logging.info("Chank enumerate")
-                # Chunk embedding
-                embedding = self.embedding.embed_query(chunk.text)
-                unique_id = str(uuid.uuid4())  # Egyedi azonosító
-                chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"
-
-                # Chunk mentése Neo4j-ba
-                self.neo4j_manager.save_chunk(
-                    chunk.text,
-                    embedding,
-                    {"chunk_id": chunk_id, **chunk.metadata}
-                )
-                logging.info("Chank mentve")
-
-                # Hipotetikus kérdések generálása
-                questions = await self.generate_hypothetical_questions(chunk.text)
-                logging.info(f"Hypotetic question:{questions}")
-
-                # Új: Minden kérdéshez is generáljunk embeddinget és tároljuk a :Question node-ban
-                question_embeddings = []
-                for question_text in questions:
-                    q_embedding = self.embedding.embed_query(question_text)  # generáljunk embeddinget
-                    logging.info(f"question embedding {question_text}")
-                    question_embeddings.append((question_text, q_embedding))
-                logging.info("question embedding done")
-
-                # Mentsük el a kérdéseket + embeddinget Neo4j-ba
-                # Lehet egy új metódus, pl. save_questions_with_embedding_to_neo4j
-                self.neo4j_manager.save_questions_with_embedding_to_neo4j(
-                    chunk_id,
-                    question_embeddings
-                )
-                logging.info("questions saved")
-
-                # Kapcsolódás topikokhoz LLM segítségével
-                chunk_topics = await self.neo4j_manager.identify_chunk_topics(chunk.text, topics)
-                for topic in chunk_topics:
-                    self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
-
-                # NEXT kapcsolat
-                if previous_chunk_id:
-                    self.neo4j_manager.create_next_relationship(previous_chunk_id, chunk_id)
-
-                previous_chunk_id = chunk_id
-
-            # Dokumentum kapcsolatok
-            self.neo4j_manager.create_document_relationships()
-
-            # Hasonlósági kapcsolatok
-            self.neo4j_manager.create_similarity_relationships(
-                index_name="chunk_embedding_index",
-                top_k=20,
-                threshold=0.8
-            )
-            logging.info("kapcsolatok done")
-
-            # Dokumentum összefoglaló
-            document_text = " ".join([chunk.text for chunk in chunks])
-            summary = await self.summarize_document(document_text)
-            self.neo4j_manager.save_summary_to_neo4j(filename, summary)
+            # 5. Összefoglaló generálása
+            await self._finalize_upload(filename, chunks)
 
             logging.info(f"File '{filename}' feldolgozása befejeződött.")
-            logging.info(f"Összes chunk a rendszerben: {self.neo4j_manager.count_chunks()}")
-
         except Exception as e:
             logging.error(f"Error uploading document: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -1317,6 +1114,107 @@ class VectorStoreManager:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
+    async def _process_chunks(self, chunks, topics, max_concurrent_tasks=5):
+        """
+        A chunks feldolgozása, párhuzamosan, de limitált számú szálon.
+        
+        Args:
+            chunks (list): A feldolgozandó chunks lista.
+            topics (list): A kapcsolódó témák listája.
+            max_concurrent_tasks (int): Egyszerre futtatható párhuzamos feladatok száma.
+        """
+        semaphore = asyncio.Semaphore(max_concurrent_tasks)  # Limitáljuk a párhuzamos feladatok számát
+
+        async def process_single_chunk(chunk, idx):
+            async with semaphore:  # Egyszerre csak max_concurrent_tasks feladat futhat
+                # Chunk embedding generálása
+                embedding = await self.model_manager.embed_query(chunk.text)
+                unique_id = str(uuid.uuid4())
+                chunk_id = f"{chunk.metadata['file_name']}_chunk_{idx}_{unique_id}"
+
+                # Chunk mentése Neo4j-ba
+                self.neo4j_manager.save_chunk(chunk.text, embedding, {"chunk_id": chunk_id, **chunk.metadata})
+
+                # Kérdések generálása és embeddingek mentése egy lépésben
+                questions = await self.generate_hypothetical_questions(chunk.text)
+                question_embeddings = [
+                    (question_text, await self.model_manager.embed_query(question_text))
+                    for question_text in questions
+                ]
+                self.neo4j_manager.save_questions_with_embedding_to_neo4j(chunk_id, question_embeddings)
+
+                # Topikok azonosítása
+                chunk_topics = await self.neo4j_manager.identify_chunk_topics(chunk.text, topics)
+                for topic in chunk_topics:
+                    self.neo4j_manager.link_chunk_to_topic(chunk_id, topic)
+
+                return chunk_id
+
+        # Párhuzamos feldolgozás limitált szálon
+        tasks = [process_single_chunk(chunk, idx) for idx, chunk in enumerate(chunks)]
+        chunk_ids = await asyncio.gather(*tasks)
+
+        # NEXT kapcsolatok építése
+        for i in range(1, len(chunk_ids)):
+            self.neo4j_manager.create_next_relationship(chunk_ids[i - 1], chunk_ids[i])
+
+
+    async def _finalize_upload(self, filename, chunks):
+        # Dokumentum összefoglaló generálása
+        document_text = " ".join([chunk.text for chunk in chunks])
+        summary = await self.summarize_document(document_text)
+        self.neo4j_manager.save_summary_to_neo4j(filename, summary)
+
+        # Kapcsolatok létrehozása
+        self.neo4j_manager.create_document_relationships()
+        self.neo4j_manager.create_similarity_relationships(
+            index_name="chunk_embedding_index", top_k=20, threshold=0.8
+        )
+
+    async def _load_file_content(self, file_or_content, filename):
+        if isinstance(file_or_content, UploadFile):
+            content = await file_or_content.read()
+            filename = file_or_content.filename
+        elif isinstance(file_or_content, bytes):
+            content = file_or_content
+            if filename is None:
+                raise ValueError("Filename must be provided when uploading bytes content")
+        else:
+            raise ValueError("Invalid input type. Expected UploadFile or bytes.")
+        return content, filename
+
+    def _create_temp_file(self, content, filename):
+        temp_dir = f"/tmp/{filename}_temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file_path = os.path.join(temp_dir, filename)
+        with open(temp_file_path, "wb") as temp_file:
+            temp_file.write(content)
+        return temp_file_path
+
+    def _prepare_documents(self, text, filename):
+        return [Document(text=text, metadata={"file_name": filename})]
+
+    def _create_chunks(self, documents):
+        def chunk_text_with_metadata(text, chunk_size=512, file_name="unknown_file"):
+            words = text.split()
+            chunks = []
+            for i in range(0, len(words), chunk_size):
+                chunk_content = ' '.join(words[i:i + chunk_size])
+                metadata = {
+                    "chunk_index": i // chunk_size,
+                    "chunk_start": i,
+                    "chunk_end": i + chunk_size,
+                    "file_name": file_name
+                }
+                chunks.append(Document(text=chunk_content, metadata=metadata))
+            return chunks
+
+        chunks = []
+        for doc in documents:
+            chunks.extend(chunk_text_with_metadata(doc.text, file_name=doc.metadata["file_name"]))
+        return chunks
+           
+           
            
     def periodic_full_rebuild(self):
         """

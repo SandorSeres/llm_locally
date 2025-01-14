@@ -20,9 +20,11 @@ services:
     ports:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
-      - "7473:7473"  # HTTPS
-    environment:
+      - "7473:7473"  # HTTP    environment:
       - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+      - NEO4JLABS_PLUGINS=["apoc", "gds"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*,gds.*
 
     volumes:
       - neo4j_data:/data
@@ -30,9 +32,9 @@ services:
       - neo4j_import:/import
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7474"]
-      interval: 10s
+      interval: 20s
       timeout: 10s
-      retries: 5
+      retries: 10
 
   app:
     build:

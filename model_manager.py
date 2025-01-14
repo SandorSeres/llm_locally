@@ -15,12 +15,33 @@ class ModelManager:
     def __init__(self, model_type: str, model_name: str, api_url: str = None, api_key: str = None):
         self.model_type = model_type
         self.model_name = model_name
+        self.embedding_size = 768
         # Ollama url/key
         self.ollama_api_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
         
         # OpenAI url/key        
         self.openai_api_url = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/chat/completions")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+
+    async def embed_query(self, text: str) -> List[float]:
+        """
+        Embed szöveg generálása a kiválasztott modell alapján.
+        """
+        if self.model_type == "ollama":
+            url = "http://ollama:11434/api/embeddings"  # Állítsd be a megfelelő címet
+            payload = {"model": "nomic-embed-text", "prompt": text}
+            async with httpx.AsyncClient(timeout=600) as client:
+                response = await client.post(url, json=payload)
+                if response.status_code == 200:
+                    result = response.json()
+                    return result["embedding"]
+                else:
+                    raise Exception(f"Ollama embedding hiba: {response.status_code}, {response.text}")
+        elif self.model_type == "openai":
+            # OpenAI embedding logika
+            raise NotImplementedError("OpenAI embedding még nincs implementálva.")
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
 
     async def generate_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
         """
