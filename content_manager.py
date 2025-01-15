@@ -61,7 +61,11 @@ class ContentManager:
                     "messages": [
                         {
                             "role": "user",
-                            "content": "Mit látsz a képen? Ha szöveges akkor add vissza pontosan a teljes szöveget",
+                            "content": """Act as an OCR assistant. Analyze the provided image and:
+                        1. Recognize all visible text in the image as accurately as possible.
+                        2. Maintain the original structure and formatting of the text.
+                        3. If any words or phrases are unclear, indicate this with [unclear] in your transcription.
+                        Provide only the transcription without any additional comments.""",
                             "images": [base64_image],
                         },
                     ],

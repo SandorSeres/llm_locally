@@ -17,6 +17,7 @@ import httpx
 import asyncio
 import sys
 import importlib.util
+import numpy as np
 # Python verzió meghatározása
 python_version = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
 
@@ -57,6 +58,37 @@ class Neo4jManager:
     def close(self):
         """Close the Neo4j connection."""
         self.driver.close()
+
+    @staticmethod
+    def calculate_similarity(vec1: List[float], vec2: List[float]) -> float:
+        """
+        Calculate the cosine similarity between two vectors.
+
+        Args:
+            vec1 (List[float]): The first vector.
+            vec2 (List[float]): The second vector.
+
+        Returns:
+            float: The cosine similarity score (range: -1 to 1).
+        """
+        if not vec1 or not vec2:
+            raise ValueError("Both vectors must be non-empty.")
+        
+        vec1 = np.array(vec1)
+        vec2 = np.array(vec2)
+
+        if vec1.shape != vec2.shape:
+            raise ValueError("Vectors must have the same dimensions.")
+        
+        # Cosine similarity calculation
+        dot_product = np.dot(vec1, vec2)
+        norm_vec1 = np.linalg.norm(vec1)
+        norm_vec2 = np.linalg.norm(vec2)
+
+        if norm_vec1 == 0 or norm_vec2 == 0:
+            raise ValueError("Vectors must not be zero-length.")
+
+        return dot_product / (norm_vec1 * norm_vec2)
 
     def create_topics(self, topics: List[str]):
         """
@@ -186,24 +218,31 @@ class Neo4jManager:
     def save_questions_with_embedding_to_neo4j(
         self,
         chunk_id: str,
+        chunk_embedding: List[float],
         question_embeddings: List[tuple]
     ):
         """
         Save the generated questions (with embedding) to Neo4j and link them to the chunk.
+        Includes a default score based on similarity.
 
-        question_embeddings: List[tuple(text, embedding)]
+        Args:
+            chunk_id (str): The ID of the chunk.
+            chunk_embedding (List[float]): The embedding of the chunk.
+            question_embeddings (List[tuple]): List of tuples containing question text and embeddings.
         """
         query = """
         MATCH (chunk:Chunk {chunk_id: $chunk_id})
         UNWIND $question_embeddings AS qe
         MERGE (q:Question {text: qe.question_text})
-        SET q.embedding = qe.embedding
+        SET q.embedding = qe.embedding,
+            q.score = qe.score
         MERGE (chunk)-[:GENERATES]->(q)
         """
-        # A paraméterek "list of dictionaries" formában mehetnek, pl.:
         q_list = []
         for (q_text, q_emb) in question_embeddings:
-            q_list.append({"question_text": q_text, "embedding": q_emb})
+            # Hasonlósági score számítása (pl. cosine similarity)
+            score = self.calculate_similarity(chunk_embedding, q_emb)
+            q_list.append({"question_text": q_text, "embedding": q_emb, "score": score})
 
         with self.driver.session() as session:
             session.run(query, {"chunk_id": chunk_id, "question_embeddings": q_list})
@@ -567,10 +606,15 @@ class Neo4jManager:
                 "source": "embedding"
             })
 
-        # (7B) Add question-based chunk results
+        # (7B) Add question-based chunk results with scores
         for r in question_based_results:
-            combined_results.append(r)
-            # Itt r már hasonló formátumot követ: "text", "metadata", "score"
+            combined_results.append({
+                "text": r["text"],
+                "metadata": r["metadata"],
+                "score": r["score"] if r["score"] is not None else 0,  # Default 0, ha nincs score
+                "source": "question_embedding",
+                "matching_question": r.get("matching_question", "")  # Tartsd meg a matching_question mezőt
+            })
 
         # (7C) Add graph results
         for record in graph_results:
@@ -1141,7 +1185,11 @@ class VectorStoreManager:
                     (question_text, await self.model_manager.embed_query(question_text))
                     for question_text in questions
                 ]
-                self.neo4j_manager.save_questions_with_embedding_to_neo4j(chunk_id, question_embeddings)
+                self.neo4j_manager.save_questions_with_embedding_to_neo4j(
+                    chunk_id,
+                    embedding,  # A helyes chunk_embedding
+                    question_embeddings
+                )
 
                 # Topikok azonosítása
                 chunk_topics = await self.neo4j_manager.identify_chunk_topics(chunk.text, topics)

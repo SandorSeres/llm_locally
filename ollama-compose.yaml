@@ -5,7 +5,10 @@ services:
       - "11434:11434"
     environment:
       - OLLAMA_FLASH_ATTENTION=1  
-      - OLLAMA_KV_CACHE_TYPE=q8_0  
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      - GIN_MODE=release
+      - OLLAMA_RATE_LIMIT_GENERATE=100
+      - OLLAMA_RATE_LIMIT_EMBEDDINGS=50
     deploy:
       resources:
         reservations:

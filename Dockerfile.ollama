@@ -26,7 +26,11 @@ ENV OLLAMA_LOAD_TIMEOUT=30m
 ENV OLLAMA_KEEP_ALIVE=10m    
 # Max várakozó kérések száma
 ENV OLLAMA_MAX_QUEUE=1024    
+# Explicit módon állítjuk be a GIN_MODE értékét
+ENV GIN_MODE=release
 
-# Ha minden modell sikeresen letöltődött, akkor a CMD-ben már csak a szervert indítjuk.
+# Az alapértelmezett ENTRYPOINT felülírása
+ENTRYPOINT ["ollama"]
+
+# A szerver indítása
 CMD ["serve"]
-

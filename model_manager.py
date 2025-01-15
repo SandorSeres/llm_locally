@@ -15,7 +15,15 @@ class ModelManager:
     def __init__(self, model_type: str, model_name: str, api_url: str = None, api_key: str = None):
         self.model_type = model_type
         self.model_name = model_name
-        self.embedding_size = 768
+        self.embedding_size = 768  # Alapértelmezett érték
+        
+        if self.model_type == "ollama":
+            self.embedding_size = 768  # Ollama alapértelmezett embedding méret
+        elif self.model_type == "openai":
+            self.embedding_size = 1536  # OpenAI text-embedding-ada-002 méret
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+
         # Ollama url/key
         self.ollama_api_url = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/chat")
         
@@ -28,7 +36,7 @@ class ModelManager:
         Embed szöveg generálása a kiválasztott modell alapján.
         """
         if self.model_type == "ollama":
-            url = "http://ollama:11434/api/embeddings"  # Állítsd be a megfelelő címet
+            url = os.getenv("OLLAMA_EMBEDDING_API_URL", "http://localhost:11434/api/embeddings")
             payload = {"model": "nomic-embed-text", "prompt": text}
             async with httpx.AsyncClient(timeout=600) as client:
                 response = await client.post(url, json=payload)
@@ -39,9 +47,23 @@ class ModelManager:
                     raise Exception(f"Ollama embedding hiba: {response.status_code}, {response.text}")
         elif self.model_type == "openai":
             # OpenAI embedding logika
-            raise NotImplementedError("OpenAI embedding még nincs implementálva.")
+            headers = {"Authorization": f"Bearer {self.openai_api_key}"}
+            payload = {
+                "model": "text-embedding-ada-002",  # Az OpenAI ajánlott embedding modellje
+                "input": text
+            }
+
+            async with httpx.AsyncClient(timeout=600) as client:
+                response = await client.post(self.openai_api_url.replace("/chat/completions", "/embeddings"),
+                                             headers=headers, json=payload)
+                if response.status_code == 200:
+                    result = response.json()
+                    return result['data'][0]['embedding']
+                else:
+                    raise Exception(f"OpenAI embedding hiba: {response.status_code}, {response.text}")
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
+
 
     async def generate_stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[dict, None]:
         """
