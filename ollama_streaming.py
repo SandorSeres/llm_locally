@@ -64,7 +64,7 @@ logging.basicConfig(level=logging.INFO)
 # Globális változók
 
 model_options = {
-    "ollama": ["llama3.2","gemma2","mistral-nemo"],
+    "ollama": ["llama3.2","deepseek-r1:14b", "gemma3:27b"],
     "openai": ["gpt-4o", "gpt-4o-mini"]
 }
 
@@ -85,11 +85,12 @@ async def lifespan(app: FastAPI):
         modelmanager = model_manager.ModelManager(model_type="ollama", model_name="llama3.2")
         logger.info("ModelManager initialized successfully", exc_info=True)
         # Neo4jManager inicializálása
+        logger.info(f"""{os.getenv("NEO4J_USERNAME", "neo4j")}/{os.getenv("NEO4J_PASSWORD")}""")
         neo4j_manager = neo4jrag.Neo4jManager(
             model_manager=modelmanager,
-            url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            url=os.getenv("NEO4J_URI", "bolt://neo4j_vector:7687"),
             username=os.getenv("NEO4J_USERNAME", "neo4j"),
-            password=os.getenv("NEO4J_PASSWORD", "password"),
+            password=os.getenv("NEO4J_PASSWORD", "neo4j"),
         )
         logger.info("Neo4jManager initialized successfully", exc_info=True)
 
@@ -185,17 +186,26 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
     messages = history.copy()
     messages.append({
         "role": "system",
-        "content": (
-            "Answer the user question using the information in the context. "
-            "If no context is available, use your own info.\n"
-            f"Context:\n{rag_context}\n"
-            "You shouls all the time tell the source of the information\n"
-            "example:\n"
-            "<ANSware>\n"
-            "Source: <file1>, <file2>"
-             
-        )
+        "content": f"""Az alábbi kontextus alapján válaszold meg röviden, pontosan és tényszerűen a felhasználó kérdését.
+
+    Utasítások:
+    1. Csak a megadott kontextusból származó információkat használd fel. Ne támaszkodj külső ismeretekre.
+    2. A válasz legyen releváns, jól megfogalmazott, világos és nyelvtanilag helyes.
+    3. Ha a válasz megtalálható a kontextusban:
+        - Fogalmazd meg tömören, de érthetően.
+        - Pontosan említs meg minden releváns nevet, intézményt, adatot vagy tényt.
+    4. Ha a kontextus nem tartalmaz elegendő vagy releváns információt:
+        - Jelezd ezt világosan az alábbi mondattal:  
+        „Sajnos ilyen információ nem található a megadott kontextusban.”
+    5. A válasz végén külön sorban sorold fel a felhasznált forrásfájlok neveit, így:
+    Forrás: pelda1.pdf, pelda2.pdf
+
+    ---------------------
+    Kontextus:
+    {rag_context}
+    """
     })
+
     messages.append({"role": "user", "content": query})
 
     local_model_manager = model_manager.ModelManager(
@@ -250,8 +260,12 @@ async def generate_response_stream(query: str, session_id: str, session_data: di
 @app.post("/generate")
 async def generate(query: QueryModel, request: Request):
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        session_id = create_session()
+
+# TODO: a Docker-composeban kellene beállítani a kéép_sessoin or not változót
+#    if not session_id:
+#        session_id = create_session()
+
+    session_id = create_session()
 
     session_data = get_session(session_id)
     if not session_data:

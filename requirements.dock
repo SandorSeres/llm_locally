@@ -12,7 +12,7 @@ pillow
 optimum
 auto-gptq
 autoawq
-vllm
+#vllm
 bitsandbytes
 sentence-transformers
 python-multipart

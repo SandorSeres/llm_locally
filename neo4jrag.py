@@ -18,6 +18,10 @@ import asyncio
 import sys
 import importlib.util
 import numpy as np
+
+#https://towardsdatascience.com/enterprise-ready-knowledge-graphs-96028d863e8c
+# https://github.com/langchain-ai/langchain-experimental/blob/main/libs/experimental/langchain_experimental/graph_transformers/llm.py
+
 # Python verzió meghatározása
 python_version = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
 
@@ -465,7 +469,6 @@ class Neo4jManager:
         chunk_indexes_from_embedding = [res["metadata"]["chunk_index"] for res in embedding_results if res["metadata"].get("chunk_index") is not None]
 
         # ---(2B) Question-based embedding search---
-        #  Itt a question_embedding_index-ből keressük a top K releváns question node-ot.
         question_index_name = "question_embedding_index"
         question_query = f"""
         CALL db.index.vector.queryNodes('{question_index_name}', $k, $query_embedding)
@@ -492,7 +495,6 @@ class Neo4jManager:
         question_based_results = []
         if question_results:
             q_ids = [r["question_id"] for r in question_results]
-            # Kikeressük, hogy ezek a question node-ok mely Chunk node-okra mutatnak ([:GENERATES]->(c:Chunk))
             get_chunk_for_question_query = """
             MATCH (q:Question)-[:GENERATES]->(c:Chunk)
             WHERE id(q) IN $q_ids
@@ -523,12 +525,13 @@ class Neo4jManager:
                     "metadata": {
                         "chunk_id": row["chunk_id"],
                         "file_name": row["file_name"],
-                        "chunk_index": row["chunk_index"],  # itt is szerepel
+                        "chunk_index": row["chunk_index"],
                         "chunk_start": row["chunk_start"],
                         "chunk_end": row["chunk_end"],
                     },
                     "score": question_score,
                     "source": "question_embedding",
+                    "search_type": "question_based_search",
                     "matching_question": question_text
                 })
 
@@ -542,7 +545,7 @@ class Neo4jManager:
         # Összevonjuk a chunk_indexeket:
         all_chunk_indexes = set(chunk_indexes_from_embedding + chunk_indexes_from_questions)
 
-        # ---(3) Graph relationship-based search (továbbra is chunk_index alapon)---
+        # ---(3) Graph relationship-based search---
         graph_query = """
         MATCH (chunk:Chunk)-[:SIMILAR_TO|BELONGS_TO|NEXT]->(related_chunk:Chunk)
         WHERE chunk.chunk_index IN $chunk_indexes
@@ -592,7 +595,7 @@ class Neo4jManager:
         # ---(7) Combine all results---
         combined_results = []
 
-        # (7A) Add chunk embedding results (a régi eredmények)
+        # (7A) Add chunk embedding results
         for result in embedding_results:
             combined_results.append({
                 "text": result["text"],
@@ -603,7 +606,8 @@ class Neo4jManager:
                     "chunk_end": result["metadata"].get("chunk_end"),
                 },
                 "score": result["score"],
-                "source": "embedding"
+                "source": "embedding",
+                "search_type": "embedding_based_search"
             })
 
         # (7B) Add question-based chunk results with scores
@@ -611,9 +615,10 @@ class Neo4jManager:
             combined_results.append({
                 "text": r["text"],
                 "metadata": r["metadata"],
-                "score": r["score"] if r["score"] is not None else 0,  # Default 0, ha nincs score
+                "score": r["score"] if r["score"] is not None else 0,
                 "source": "question_embedding",
-                "matching_question": r.get("matching_question", "")  # Tartsd meg a matching_question mezőt
+                "search_type": "question_based_search",
+                "matching_question": r.get("matching_question", "")
             })
 
         # (7C) Add graph results
@@ -627,7 +632,8 @@ class Neo4jManager:
                     "chunk_end": record.get("chunk_end"),
                 },
                 "score": None,
-                "source": record.get("source", "graph")
+                "source": record.get("source", "graph"),
+                "search_type": "graph_based_search"
             })
 
         # (7D) Add summaries
@@ -638,10 +644,11 @@ class Neo4jManager:
                     "document_name": record["document_name"]
                 },
                 "score": None,
-                "source": record.get("source", "summary")
+                "source": record.get("source", "summary"),
+                "search_type": "summary_based_search"
             })
 
-        # (7E) Add the legacy question results (chunk-index-based)
+        # (7E) Add the legacy question results
         for record in question_results_legacy:
             combined_results.append({
                 "text": record["text"],
@@ -649,7 +656,8 @@ class Neo4jManager:
                     "file_name": record.get("file_name", "unknown"),
                 },
                 "score": None,
-                "source": record.get("source", "question")
+                "source": record.get("source", "question"),
+                "search_type": "legacy_question_based_search"
             })
 
         # (7F) Add topic-based results
@@ -664,7 +672,8 @@ class Neo4jManager:
                     "chunk_end": record.get("chunk_end"),
                 },
                 "score": None,
-                "source": record.get("source", "topic")
+                "source": record.get("source", "topic"),
+                "search_type": "topic_based_search"
             })
 
         # ---(8) Sort by "score" descending, default 0 if None---

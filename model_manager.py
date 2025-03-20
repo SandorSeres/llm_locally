@@ -294,57 +294,6 @@ class ModelManager:
             
             return result
 
-    """
-    async def _generate_ollama_tool_calling(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> str:
-        prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        # Strukturált kimeneti séma definiálása
-        structured_prompt = f"{prompt}\n\nA kimenet formátuma:\n" + json.dumps({
-            "response": {
-                "type": "object",
-                "properties": {
-                    "tool_calls": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "arguments": {"type": "object"},
-                            },
-                        },
-                    },
-                    "text": {"type": "string"},
-                },
-            }
-        }, indent=2)
-        
-        async with httpx.AsyncClient(timeout=600) as client:
-            response = await client.post(
-                self.ollama_api_url,
-                json={
-                    "model": self.model_name,
-                    "prompt": structured_prompt,
-                    "tools": tools,
-                    "options": {"num_ctx": 60000}
-                },
-                timeout=600
-            )
-            
-            result = ""
-            async for line in response.aiter_lines():
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    data = json.loads(line)
-                    result += json.dumps(data, indent=2)  # JSON formázás
-                except json.JSONDecodeError:
-                    logger.warning(f"Skipping non-JSON line: {line}")
-                    continue
-            
-            return result
-
-    """
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """
@@ -368,35 +317,15 @@ class ModelManager:
         return f"A(z) {city} városban jelenleg napos az idő, 25°C hőmérséklettel."
 
 
-"""
-Használat:
+    """
+    Használat:
 
-Eszközök vagy funkciók definiálása:
+    Eszközök vagy funkciók definiálása:
 
-OpenAI esetében:
+    OpenAI esetében:
 
-functions = [
-    {
-        "name": "get_current_weather",
-        "description": "Lekéri az aktuális időjárást egy adott városban.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "A város neve, amelynek időjárását le kell kérni.",
-                },
-            },
-            "required": ["city"],
-        },
-    },
-]
-Ollama esetében:
-
-tools = [
-    {
-        "type": "function",
-        "function": {
+    functions = [
+        {
             "name": "get_current_weather",
             "description": "Lekéri az aktuális időjárást egy adott városban.",
             "parameters": {
@@ -410,16 +339,69 @@ tools = [
                 "required": ["city"],
             },
         },
-    },
-]
-Kérés küldése a Tool Calling metódushoz:
+    ]
+    Ollama esetében:
 
-OpenAI esetében:
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Lekéri az aktuális időjárást egy adott városban.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "A város neve, amelynek időjárását le kell kérni.",
+                        },
+                    },
+                    "required": ["city"],
+                },
+            },
+        },
+    ]
+    Kérés küldése a Tool Calling metódushoz:
 
-model_manager = ModelManager(model_type="openai", model_name="gpt-3.5-turbo")
-result = await model_manager.generate_tool_calling(messages, functions)
-Ollama esetében:
+    OpenAI esetében:
 
-model_manager = ModelManager(model_type="ollama", model_name="your-ollama-model")
-result = await model_manager.generate_tool_calling(messages, tools)
-"""
+    model_manager = ModelManager(model_type="openai", model_name="gpt-3.5-turbo")
+    result = await model_manager.generate_tool_calling(messages, functions)
+    Ollama esetében:
+
+    model_manager = ModelManager(model_type="ollama", model_name="your-ollama-model")
+    result = await model_manager.generate_tool_calling(messages, tools)
+    """
+
+    async def process_image(self, messages: List[Dict[str, str]], model_type: str = "image") -> str:
+        """
+        Kép OCR feldolgozás OpenAI vagy Ollama segítségével.
+        """
+        if model_type == "image":
+            if self.model_type == "ollama":
+                return await self._ollama_image_processing(messages)
+            elif self.model_type == "openai":
+                return await self._openai_image_processing(messages)
+        raise ValueError(f"Unsupported model type for image: {self.model_type}")
+
+    async def _ollama_image_processing(self, messages: List[Dict[str, str]]) -> str:
+        """
+        Ollama OCR vagy képfeldolgozási feladatok végrehajtása.
+        """
+        async with requests.post(
+            self.ollama_api_url,
+            json={"model": "llama3.2-vision", "messages": messages},
+            timeout=600
+        ) as response:
+            return response.json().get("response", "")
+
+    async def _openai_image_processing(self, messages: List[Dict[str, str]]) -> str:
+        """
+        OpenAI OCR vagy képfeldolgozási feladatok végrehajtása.
+        """
+        headers = {"Authorization": f"Bearer {self.openai_api_key}"}
+        body = {"model": "gpt-o1", "messages": messages}
+        async with requests.post(self.openai_api_url, headers=headers, json=body, timeout=600) as response:
+            return response.json()["choices"][0]["message"]["content"]
+
+
